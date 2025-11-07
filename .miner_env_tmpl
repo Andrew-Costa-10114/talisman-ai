@@ -6,7 +6,7 @@ X_BEARER_TOKEN=
 
 X_API_BASE=https://api.twitter.com/2
 
-MINER_API_URL=http://127.0.0.1:8000
+MINER_API_URL=https://talisman.rizzo.network/api
 BATCH_HTTP_TIMEOUT=30.0
 
 MAX_POSTS=0
