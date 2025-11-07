@@ -1,0 +1,17 @@
+pip>=23.0
+setuptools>=68
+wheel
+starlette>=0.30.0
+pydantic>=2
+rich>=13
+pytest>=8
+torch>=2
+numpy>=1
+requests>=2.31.0
+httpx>=0.24.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
+python-dateutil>=2.8.0
+bittensor>=7.0.0
+tweepy>=4.14.0
+openai>=1.0.0
