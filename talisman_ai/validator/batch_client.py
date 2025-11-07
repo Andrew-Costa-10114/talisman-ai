@@ -3,8 +3,22 @@ import asyncio
 from typing import Any, Dict, List, Callable, Optional, Union
 import httpx
 import bittensor as bt
+import time
+import sys
+import os
 
 from talisman_ai import config
+
+# Import auth utilities for creating signed headers
+api_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "api")
+if os.path.exists(api_path):
+    sys.path.insert(0, api_path)
+    try:
+        from auth_utils import create_auth_message, sign_message
+    except ImportError:
+        # If auth_utils not available, we'll use a fallback
+        create_auth_message = None
+        sign_message = None
 
 # Type alias for the batch callback function
 # Signature: (batch_id: int, batch: List[Dict[str, Any]]) -> Union[asyncio.Future, None, Any]
@@ -37,6 +51,7 @@ class BatchClient:
         api_url: Optional[str] = None,
         poll_seconds: Optional[int] = None,
         http_timeout: Optional[float] = None,
+        wallet: Optional[bt.wallet] = None,
     ):
         """
         Initialize the BatchClient with configuration.
@@ -48,14 +63,35 @@ class BatchClient:
                          env var or 10 seconds
             http_timeout: HTTP request timeout in seconds. Defaults to BATCH_HTTP_TIMEOUT
                          env var or 10.0 seconds
+            wallet: Optional Bittensor wallet for authentication. If provided, requests will include signed auth headers.
         """
         self.api_url = api_url or config.MINER_API_URL
         self.endpoint = f"{self.api_url}/v1/batch"
         self.poll_seconds = int(poll_seconds or config.BATCH_POLL_SECONDS)
         self.http_timeout = float(http_timeout or config.BATCH_HTTP_TIMEOUT)
+        self.wallet = wallet
 
         self._last_batch_id: Optional[int] = None
         self._running: bool = False
+
+    def _create_auth_headers(self) -> Dict[str, str]:
+        """Create authentication headers if wallet is available"""
+        headers = {}
+        if self.wallet and create_auth_message and sign_message:
+            try:
+                timestamp = time.time()
+                message = create_auth_message(timestamp)
+                signature = sign_message(self.wallet, message)
+                headers = {
+                    "X-Auth-SS58Address": self.wallet.hotkey.ss58_address,
+                    "X-Auth-Signature": signature,
+                    "X-Auth-Message": message,
+                    "X-Auth-Timestamp": str(timestamp)
+                }
+                bt.logging.debug(f"[BATCH] Created authentication headers for hotkey: {self.wallet.hotkey.ss58_address}")
+            except Exception as e:
+                bt.logging.warning(f"[BATCH] Failed to create auth headers: {e}, proceeding without auth")
+        return headers
 
     async def _fetch_once(self) -> Dict[str, Any]:
         """
@@ -73,8 +109,9 @@ class BatchClient:
             httpx.HTTPStatusError: If the HTTP request fails with a non-2xx status
         """
         bt.logging.debug(f"[BATCH] Fetching batch from {self.endpoint} (timeout={self.http_timeout}s)")
+        headers = self._create_auth_headers()
         async with httpx.AsyncClient(timeout=self.http_timeout) as client:
-            r = await client.get(self.endpoint)
+            r = await client.get(self.endpoint, headers=headers)
             r.raise_for_status()
             data = r.json()
             bt.logging.debug(f"[BATCH] Fetch response: available={data.get('available')}, batch_id={data.get('batch_id')}")

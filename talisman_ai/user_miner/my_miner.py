@@ -32,17 +32,18 @@ class MyMiner:
     Runs continuously until max_posts is reached or stopped explicitly.
     """
     
-    def __init__(self, hotkey: str = "HOTKEY_PLACEHOLDER"):
+    def __init__(self, hotkey: str = "HOTKEY_PLACEHOLDER", wallet: bt.wallet = None):
         """
         Initialize the miner with required components.
         
         Args:
             hotkey: Miner hotkey identifier, typically provided by the parent neuron.
                    Defaults to placeholder if not provided.
+            wallet: Optional Bittensor wallet for API authentication.
         """
         self.scraper = PostScraper()
         self.analyzer = setup_analyzer()
-        self.api_client = APIClient()
+        self.api_client = APIClient(wallet=wallet)
 
         self.miner_hotkey = hotkey
 

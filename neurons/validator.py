@@ -5,6 +5,8 @@
 import asyncio
 import time
 from typing import List, Dict, Any
+import sys
+import os
 
 import numpy as np
 import bittensor as bt
@@ -16,6 +18,17 @@ from talisman_ai.validator.batch_client import BatchClient
 from talisman_ai.validator.grader import grade_hotkey, CONSENSUS_VALID, CONSENSUS_INVALID
 
 import httpx
+
+# Import auth utilities for creating signed headers
+api_path = os.path.join(os.path.dirname(__file__), "..", "api")
+if os.path.exists(api_path):
+    sys.path.insert(0, api_path)
+    try:
+        from auth_utils import create_auth_message, sign_message
+    except ImportError:
+        # If auth_utils not available, we'll use a fallback
+        create_auth_message = None
+        sign_message = None
 
 
 # API configuration for batch validation system
@@ -46,7 +59,8 @@ class Validator(BaseValidatorNeuron):
 
         # Initialize batch client for polling miner submissions
         # The client will be started in forward() once an asyncio event loop is available
-        self._batch_client = BatchClient()
+        # Pass wallet for authentication
+        self._batch_client = BatchClient(wallet=self.wallet)
         self._batch_task: asyncio.Task | None = None
 
     async def _submit_hotkey_votes(self, batch_id: int, votes: List[Dict[str, Any]]):
@@ -67,7 +81,28 @@ class Validator(BaseValidatorNeuron):
             "batch_id": int(batch_id),
             "votes": votes,
         }
-        headers = {"x-hotkey": str(self.wallet.hotkey.ss58_address)}
+        
+        # Create authentication headers if available
+        headers = {}
+        if self.wallet and create_auth_message and sign_message:
+            try:
+                timestamp = time.time()
+                message = create_auth_message(timestamp)
+                signature = sign_message(self.wallet, message)
+                headers = {
+                    "X-Auth-SS58Address": self.wallet.hotkey.ss58_address,
+                    "X-Auth-Signature": signature,
+                    "X-Auth-Message": message,
+                    "X-Auth-Timestamp": str(timestamp)
+                }
+                bt.logging.debug(f"[VALIDATE] Created authentication headers for hotkey: {self.wallet.hotkey.ss58_address}")
+            except Exception as e:
+                bt.logging.warning(f"[VALIDATE] Failed to create auth headers: {e}, proceeding without auth")
+                # No fallback - auth is required
+                headers = {}
+        else:
+            # No fallback - auth is required
+            headers = {}
 
         bt.logging.info(f"[VALIDATE] Submitting {len(votes)} votes for batch_id={batch_id} to {VOTE_ENDPOINT}")
         bt.logging.debug(f"[VALIDATE] Payload: validator_hotkey={payload['validator_hotkey']}, batch_id={batch_id}")

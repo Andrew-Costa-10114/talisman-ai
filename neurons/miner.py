@@ -25,9 +25,9 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
 
         # Initialize the user miner (runs in background thread)
-        # Pass the hotkey from the wallet
+        # Pass the hotkey and wallet from the wallet for authentication
         hotkey = self.wallet.hotkey.ss58_address
-        self.my_miner = MyMiner(hotkey=hotkey)
+        self.my_miner = MyMiner(hotkey=hotkey, wallet=self.wallet)
         self.my_miner.start()
         
         bt.logging.info(f"User miner started with hotkey: {hotkey}")
