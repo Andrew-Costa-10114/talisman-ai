@@ -190,7 +190,7 @@ Copy `.vali_env_tmpl` to `.vali_env` and configure the following variables:
 
 ```bash
 python neurons/miner.py \
-  --netuid 45 \
+  --netuid 171 \
   --subtensor.network test \
   --wallet.name cold \
   --wallet.hotkey hot.miner.1 \
@@ -204,7 +204,7 @@ python neurons/miner.py \
 
 ```bash
 python neurons/validator.py \
-  --netuid 45 \
+  --netuid 171 \
   --subtensor.network test \
   --wallet.name cold \
   --wallet.hotkey hot \
