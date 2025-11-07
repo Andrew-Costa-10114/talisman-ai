@@ -1,5 +1,4 @@
 # Talisman AI 🪬 The Perception Subnet for On-Chain Trading Insights  
----
 
 ## 🪬 Vision (Why this subnet exists)
 
