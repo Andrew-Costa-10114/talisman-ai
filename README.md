@@ -25,6 +25,8 @@ That awareness starts with SN45, which serves as the eyes and ears of the agent.
 | Reasoning  | Analyze signals, generate insights           | Talisman Agent     |
 | Action     | Recommend / execute trading or staking       | Wallet Integration |
 
+![architecture phase 1](./architecture_p1.png)
+
 ---
 
 ## Phase Roadmap
