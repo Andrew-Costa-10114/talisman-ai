@@ -4,7 +4,7 @@
 
 import asyncio
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import sys
 import os
 
@@ -18,6 +18,7 @@ from talisman_ai.validator.batch_client import BatchClient
 from talisman_ai.validator.grader import grade_hotkey, CONSENSUS_VALID, CONSENSUS_INVALID
 
 import httpx
+import talisman_ai.protocol as protocol
 
 # Auth utilities for creating signed headers (defined inline, not imported from API)
 def create_auth_message(timestamp=None):
@@ -63,6 +64,8 @@ class Validator(BaseValidatorNeuron):
         # Pass wallet for authentication
         self._batch_client = BatchClient(wallet=self.wallet)
         self._batch_task: asyncio.Task | None = None
+        self._current_batch_id: Optional[str] = None  # Track current batch_id for querying miners
+        self._miner_scores: Dict[str, float] = {}  # Track scores per miner hotkey to send back
 
     async def _submit_hotkey_votes(self, batch_id: int, votes: List[Dict[str, Any]]):
         """
@@ -145,6 +148,9 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info(f"[BATCH] Batch contains {len(batch)} hotkey(s)")
         total_posts = sum(h.get("total_posts", 0) for h in batch)
         bt.logging.info(f"[BATCH] Total posts in batch: {total_posts}")
+        
+        # Store current batch_id so forward() can use it to query miners
+        self._current_batch_id = str(batch_id)
 
         votes: List[Dict[str, Any]] = []
         rewards_dict: Dict[str, float] = {}
@@ -204,6 +210,9 @@ class Validator(BaseValidatorNeuron):
             
             rewards_dict[hotkey] = reward
             
+            # Store final_score for this miner so we can send it back via Batchscore synapse
+            self._miner_scores[hotkey] = final_score
+            
             log_msg = (
                 f"[BATCH] ✓ Graded {hotkey}: label={label} (posts={len(posts)}) "
                 f"final_score={final_score:.3f} reward={reward:.3f}"
@@ -252,7 +261,79 @@ class Validator(BaseValidatorNeuron):
         else:
             bt.logging.warning(f"[BATCH] ✗ No votes to submit for batch {batch_id}")
 
+        # Send calculated scores back to miners via Batchscore synapse
+        await self._send_scores_to_miners(str(batch_id))
+
         bt.logging.info(f"[BATCH] ========== Completed batch {batch_id} ==========")
+
+
+    async def _send_scores_to_miners(self, batch_id: str, timeout: float = 8.0):
+        """
+        Send calculated scores back to miners via Batchscore synapse.
+        
+        For each miner that was graded in the batch, sends a Batchscore synapse
+        with the batch_id and the avg_score (final_score) that the validator calculated.
+        
+        Args:
+            batch_id: Batch identifier
+            timeout: Timeout for the query in seconds
+        """
+        if not self._miner_scores:
+            bt.logging.debug("[BatchScore] No miner scores to send")
+            return
+        
+        bt.logging.info(f"[BatchScore] Sending scores back to {len(self._miner_scores)} miner(s) for batch_id={batch_id}")
+        
+        # Map hotkeys to axons for sending scores
+        miner_entries = []  # List of (hotkey, axon, score) tuples
+        
+        for hotkey, score in self._miner_scores.items():
+            try:
+                uid = self.metagraph.hotkeys.index(hotkey)
+                axon = self.metagraph.axons[uid]
+                miner_entries.append((hotkey, axon, score))
+                bt.logging.debug(f"[BatchScore] Will send score {score:.3f} to miner {hotkey} (UID {uid})")
+            except ValueError:
+                bt.logging.warning(f"[BatchScore] Hotkey {hotkey} not found in metagraph, skipping score send")
+        
+        if not miner_entries:
+            bt.logging.warning("[BatchScore] No valid axons found to send scores to")
+            return
+        
+        # Create and send synapses with scores for each miner individually
+        # Since each miner gets a different score, we send them individually
+        async def send_score_to_miner(hotkey, axon, score):
+            """Send a Batchscore synapse to a single miner"""
+            syn = protocol.Batchscore(batch_id=batch_id)
+            syn.avg_score = score  # Set the score the validator calculated
+            try:
+                response = await self.dendrite(
+                    axons=[axon],
+                    synapse=syn,
+                    timeout=timeout,
+                )
+                if response and len(response) > 0:
+                    bt.logging.debug(f"[BatchScore] Sent score {score:.3f} to {hotkey}")
+                    return response[0]
+                return None
+            except asyncio.TimeoutError:
+                bt.logging.warning(f"[BatchScore] Timeout sending score to {hotkey} (timeout={timeout}s)")
+                return None
+            except Exception as e:
+                bt.logging.warning(f"[BatchScore] Error sending score to {hotkey}: {e}")
+                return None
+        
+        # Send scores to all miners in parallel
+        try:
+            tasks = [send_score_to_miner(hotkey, axon, score) for hotkey, axon, score in miner_entries]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            successful = sum(1 for r in responses if r is not None and not isinstance(r, Exception))
+            bt.logging.info(f"[BatchScore] Sent scores to {successful}/{len(tasks)} miner(s)")
+        except Exception as e:
+            bt.logging.error(f"[BatchScore] Error sending scores to miners: {e}", exc_info=True)
+        
+        # Clear scores after sending
+        self._miner_scores.clear()
 
     async def forward(self):
         """
@@ -269,6 +350,9 @@ class Validator(BaseValidatorNeuron):
         if self._batch_task is None:
             self._batch_task = asyncio.create_task(self._batch_client.run(self._on_batch))
             bt.logging.info("[BATCH] Started batch client poller")
+
+        # Note: Scores are sent to miners in _on_batch() after grading completes
+        # No need to query here - the Batchscore synapse is sent from _on_batch()
 
         # Delegate to base validator forward logic
         # Miner scores are updated in _on_batch() as batches are processed

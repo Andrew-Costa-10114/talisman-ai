@@ -18,3 +18,18 @@
 # DEALINGS IN THE SOFTWARE.
 
 import bittensor as bt
+from typing import Optional
+
+class Batchscore(bt.Synapse):
+    """
+    Synapse for sending batch scores from validator to miner.
+    
+    The validator sends this synapse to inform miners of their calculated score
+    for a specific batch. The miner receives the batch_id and avg_score (the score
+    the validator calculated during grading).
+    """
+    # Input set by validator - batch identifier
+    batch_id: str
+
+    # Input set by validator - the average score calculated by the validator for this miner's batch
+    avg_score: Optional[float] = None

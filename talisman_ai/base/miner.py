@@ -76,6 +76,11 @@ class BaseMinerNeuron(BaseNeuron):
             blacklist_fn=self.blacklist,
             priority_fn=self.priority,
         )
+        # Attach forward_batch_score handler for Batchscore synapses
+        bt.logging.info(f"Attaching forward_batch_score function to miner axon.")
+        self.axon.attach(
+            forward_fn=self.forward_batch_score
+        )
         bt.logging.info(f"Axon created: {self.axon}")
 
         # Instantiate runners

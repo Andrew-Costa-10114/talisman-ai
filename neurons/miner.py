@@ -46,6 +46,19 @@ class Miner(BaseMinerNeuron):
         bt.logging.warning(f"Received synapse type: {type(synapse).__name__}, but no handler implemented")
         return synapse
 
+
+    async def forward_batch_score(self, synapse: talisman_ai.protocol.Batchscore) -> talisman_ai.protocol.Batchscore:
+        """
+        Processes incoming synapses for batch scoring.
+        """
+        # Print the batch_id and score received from the validator
+        batch_id = synapse.batch_id
+        # Check for score in avg_score or score field
+        score = None
+        score = synapse.avg_score if synapse.avg_score is not None else synapse.score
+        bt.logging.info(f"[BatchScore] Received batch_id: {batch_id}, score: {score}")
+        return synapse
+
     async def blacklist(
         self, synapse: bt.Synapse
     ) -> typing.Tuple[bool, str]:
