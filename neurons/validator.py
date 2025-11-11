@@ -236,10 +236,10 @@ class Validator(BaseValidatorNeuron):
                 log_msg += f" | Failure: {failure_reason['code']} - {failure_reason['message']}"
             bt.logging.info(log_msg)
 
+            # Validators only vote VALID/INVALID
             vote_dict = {
                 "miner_hotkey": hotkey,
                 "label": int(label),
-                "score": float(final_score),
             }
             if failure_reason:
                 vote_dict["failure_reason"] = failure_reason
