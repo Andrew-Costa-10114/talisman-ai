@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple
 import random
 import bittensor as bt
 
-from relevance import SubnetRelevanceAnalyzer, PostClassification
+from .relevance import SubnetRelevanceAnalyzer, PostClassification
 
 
 # ===== Normalization Caps =====

@@ -20,7 +20,7 @@ import time
 from datetime import datetime
 import bittensor as bt
 
-from classifications import ContentType, Sentiment, TechnicalQuality, MarketAnalysis, ImpactPotential
+from .classifications import ContentType, Sentiment, TechnicalQuality, MarketAnalysis, ImpactPotential
 
 # Import centralized config (loads .miner_env and .vali_env)
 try:
