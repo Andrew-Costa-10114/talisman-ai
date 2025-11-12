@@ -111,7 +111,8 @@ class Validator(BaseValidatorNeuron):
             if vote.get('failure_reason'):
                 fr = vote['failure_reason']
                 failure_info = f", failure={fr.get('code', 'unknown')} - {fr.get('message', 'N/A')}"
-            bt.logging.debug(f"[VALIDATE] Vote {i+1}: miner={vote.get('miner_hotkey')}, label={vote.get('label')}, score={vote.get('score', 'N/A')}{failure_info}")
+            label_str = "VALID" if vote.get('label') == 1 else "INVALID"
+            bt.logging.debug(f"[VALIDATE] Vote {i+1}: miner={vote.get('miner_hotkey')}, label={vote.get('label')} ({label_str}){failure_info}")
 
         try:
             bt.logging.info(f"[VALIDATE] Sending POST request with timeout={HTTP_TIMEOUT}s...")
