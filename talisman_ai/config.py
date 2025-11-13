@@ -58,6 +58,14 @@ LLM_BASE = os.getenv("LLM_BASE", "null")
 X_BEARER_TOKEN = os.getenv("X_BEARER_TOKEN", "null")
 X_API_BASE = os.getenv("X_API_BASE", "null")
 
+# SN13/Macro API Configuration
+SN13_API_KEY = os.getenv("SN13_API_KEY", "null")
+SN13_API_URL = os.getenv("SN13_API_URL", "https://constellation.api.cloud.macrocosmos.ai/sn13.v1.Sn13Service/OnDemandData")
+
+# API Source Selection (for validators)
+# Set to "x_api" or "sn13_api" to choose which API to use for validation
+X_API_SOURCE = os.getenv("X_API_SOURCE", "x_api")
+
 
 # ============================================================================
 # Miner-Specific Configuration

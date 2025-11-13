@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timezone
-import time, hashlib, math
+import math
 
 import bittensor as bt
 import tweepy
@@ -11,6 +11,7 @@ from talisman_ai.analyzer import setup_analyzer
 from talisman_ai.analyzer.scoring import score_tweet_entry
 from talisman_ai import config
 from talisman_ai.utils.normalization import norm_text
+from talisman_ai.validator import x_api_client, sn13_api_client
 
 # =============================================================================
 # Miner-Facing Overview
@@ -77,14 +78,16 @@ def make_analyzer():
         return None
 
 def make_x_client():
-    """Create an X API client (REQUIRED). Uses talisman_ai.config.X_BEARER_TOKEN."""
-    token = getattr(config, "X_BEARER_TOKEN", None)
-    if not token or token == "null":
-        raise ValueError("[GRADER] X_BEARER_TOKEN not set - X API is required for validation")
-    try:
-        return tweepy.Client(bearer_token=token)
-    except Exception as e:
-        raise RuntimeError(f"[GRADER] Failed to initialize X API client: {e}") from e
+    """
+    Create the appropriate API client based on X_API_SOURCE config.
+    Returns a client object with a fetch_post() method.
+    """
+    api_source = getattr(config, "X_API_SOURCE", "sn13_api")
+    
+    if api_source == "sn13_api":
+        return sn13_api_client.create_client()
+    else:
+        return x_api_client.create_client()
 
 # === Metric tolerance and inflation rules ===
 def metric_tol(live: int) -> int:
@@ -182,34 +185,9 @@ def compute_validator_score(content: str, date_iso: str, likes: int, retweets: i
         # We surface this upstream as an INVALID result with code=score_compute_error.
         raise RuntimeError(f"score_compute_error: {e}")
 
-# === X API fetch with deterministic retries ===
-def _get_tweet_with_retry(x_client: tweepy.Client, post_id: str, attempts: int = 3):
-    """
-    Fetch post with retries for rate limits/server hiccups. Backoff includes
-    deterministic jitter seeded by post_id so replays behave the same.
-    """
-    for j in range(attempts):
-        try:
-            return x_client.get_tweet(
-                id=str(post_id),
-                expansions=["author_id"],
-                tweet_fields=["created_at", "public_metrics", "text"],
-                user_fields=["username", "name", "created_at", "public_metrics"],
-            )
-        except tweepy.TooManyRequests:
-            if j == attempts - 1: raise
-        except tweepy.TweepyException as e:
-            if j == attempts - 1: raise
-            # Only retry transient errors
-            if not any(s in str(e).lower() for s in ["500", "502", "503", "504", "timeout", "connection"]):
-                raise
-        # deterministic jitter
-        jitter_seed = int(hashlib.md5(str(post_id).encode()).hexdigest()[:8], 16) % 21
-        time.sleep(0.5 * (j + 1) + (jitter_seed / 100.0))
-    return None
 
 # === Core post-level validation against X ===
-def validate_with_x(post: Dict, x_client: tweepy.Client) -> Tuple[Optional[Dict], Dict]:
+def validate_with_x(post: Dict, x_client) -> Tuple[Optional[Dict], Dict]:
     """
     Returns (error_dict, live_metrics) where:
       - error_dict is None if the post passes all X-related checks
@@ -220,33 +198,27 @@ def validate_with_x(post: Dict, x_client: tweepy.Client) -> Tuple[Optional[Dict]
     if not post_id:
         return ({"code": "missing_post_id", "message": "post_id is required", "post_id": None, "details": {}}, {})
 
-    # 1) Fetch from X
+    # 1) Fetch from X or SN13 API
     try:
-        resp = _get_tweet_with_retry(x_client, post_id)
+        post_record = x_client.fetch_post(post_id)
     except Exception as e:
-        return ({"code": "x_api_error", "message": f"X API error: {e}", "post_id": post_id, "details": {}}, {})
-    if resp is None:
-        return ({"code": "x_api_no_response", "message": "X API gave no response after retries", "post_id": post_id, "details": {}}, {})
-    if not getattr(resp, "data", None):
-        return ({"code": "post_not_found", "message": "Post not found or inaccessible", "post_id": post_id, "details": {}}, {})
-
-    post_data = resp.data
-    users = {u.id: u for u in (getattr(resp, "includes", {}) or {}).get("users", [])}
-    author = users.get(post_data.author_id)
+        return ({"code": "x_api_error", "message": f"API error: {e}", "post_id": post_id, "details": {}}, {})
+    if post_record is None:
+        return ({"code": "x_api_no_response", "message": "API gave no response after retries", "post_id": post_id, "details": {}}, {})
 
     # 2) Text must match exactly after normalization (NFC, whitespace normalized)
     miner_text = (post.get("content") or "")
-    live_text = post_data.text or ""
+    live_text = post_record.text or ""
     if norm_text(miner_text) != norm_text(live_text):
         return ({"code": "text_mismatch", "message": "content does not match live post text (after normalization)",
                  "post_id": post_id, "details": {"miner": miner_text[:100], "live": live_text[:100], "preview_len": 100}}, {})
 
     # 3) Author must match (lowercase usernames)
     miner_author = (post.get("author") or "").strip().lower()
-    live_author = (author.username if author else "").strip().lower()
+    live_author = (post_record.author.username if post_record.author else "").strip().lower()
     if miner_author != live_author:
         return ({"code": "author_mismatch", "message": "author does not match", "post_id": post_id,
-                 "details": {"miner": post.get("author", ""), "live": author.username if author else ""}}, {})
+                 "details": {"miner": post.get("author", ""), "live": post_record.author.username if post_record.author else ""}}, {})
 
     # 4) Timestamp must match exactly (Unix seconds)
     miner_ts = post.get("date") or post.get("timestamp")
@@ -254,18 +226,17 @@ def validate_with_x(post: Dict, x_client: tweepy.Client) -> Tuple[Optional[Dict]
         bt.logging.error(f"[GRADER] Unexpected: miner timestamp None after API validation (post_id={post_id})")
         return ({"code": "timestamp_missing", "message": "timestamp is missing (API validation should have caught this)", "post_id": post_id, "details": {}}, {})
     miner_ts = int(miner_ts)
-    if not getattr(post_data, "created_at", None):
+    if not post_record.created_at:
         return ({"code": "missing_created_at", "message": "live post missing created_at from X API", "post_id": post_id, "details": {}}, {})
-    live_ts = int(post_data.created_at.timestamp())
+    live_ts = int(post_record.created_at.timestamp())
     if miner_ts != live_ts:
         return ({"code": "timestamp_mismatch", "message": "timestamp must match exactly",
                  "post_id": post_id, "details": {"miner": miner_ts, "live": live_ts, "diff_seconds": abs(live_ts - miner_ts)}}, {})
 
     # 5) Engagement/author metrics may NOT be overstated beyond tolerance
-    pm = getattr(post_data, "public_metrics", None) or {}
-    live_likes = int(pm.get("like_count", 0) or 0)
-    live_rts = int(pm.get("retweet_count", 0) or 0)
-    live_replies = int(pm.get("reply_count", 0) or 0)
+    live_likes = post_record.public_metrics.like_count
+    live_rts = post_record.public_metrics.retweet_count
+    live_replies = post_record.public_metrics.reply_count
     m_likes = int(post.get("likes") or 0)
     m_rts = int(post.get("retweets") or 0)
     m_replies = int((post.get("replies") if post.get("replies") is not None else post.get("responses")) or 0)
@@ -280,28 +251,15 @@ def validate_with_x(post: Dict, x_client: tweepy.Client) -> Tuple[Optional[Dict]
         return ({"code": "metric_inflation_replies", "message": "replies overstated beyond tolerance",
                  "post_id": post_id, "details": {"miner": m_replies, "live": live_replies, "tolerance": metric_tol(live_replies)}}, {})
 
-    followers = 0
-    if author and getattr(author, "public_metrics", None):
-        followers = int(author.public_metrics.get("followers_count", 0) or 0)
+    followers = post_record.author.followers_count if post_record.author else 0
     m_followers = int(post.get("followers") or 0)
     if metric_inflated(m_followers, followers):
         return ({"code": "metric_inflation_followers", "message": "followers overstated beyond tolerance",
                  "post_id": post_id, "details": {"miner": m_followers, "live": followers, "tolerance": metric_tol(followers)}}, {})
 
-    # 6) Compute author account age (days) from X (used later for scoring; we do NOT trust miner value)
+    # 6) Account age is excluded from grading since SN13 API doesn't provide author created_at
+    # Always set to 0 for consistency across X API and SN13 API
     account_age_days = 0
-    if author and getattr(author, "created_at", None):
-        try:
-            now = datetime.now(timezone.utc)
-            account_created = author.created_at
-            if isinstance(account_created, str):
-                account_created = isoparse(account_created)
-            if account_created.tzinfo is None:
-                account_created = account_created.replace(tzinfo=timezone.utc)
-            account_age_days = max(0, (now - account_created).days)
-        except Exception as e:
-            bt.logging.warning(f"[GRADER] Failed to compute account age: {e}, using 0")
-            account_age_days = 0
 
     # Success: pass back live data for the scoring stage
     return (None, {

@@ -79,9 +79,9 @@ def value_score(
     """
     Compute value score based on engagement metrics and author credibility
     
-    The value score is an equal-weight average of six normalized components:
+    The value score is an equal-weight average of five normalized components:
     1-4. Engagement signals (likes, retweets, quotes, replies)
-    5-6. Author credibility (follower count, account age)
+    5. Author credibility (follower count)
     
     Args:
         like_count: Number of likes on the tweet
@@ -89,7 +89,7 @@ def value_score(
         quote_count: Number of quote tweets
         reply_count: Number of replies
         author_followers: Number of followers the author has
-        account_age_days: Age of the author's account in days
+        account_age_days: Age of the author's account in days (ignored for now)
         caps: Dictionary of cap values for normalization (defaults to CAPS)
         
     Returns:
@@ -101,7 +101,7 @@ def value_score(
         _norm(quote_count or 0, caps["quotes"]),
         _norm(reply_count or 0, caps["replies"]),
         _norm(author_followers or 0, caps["followers"]),
-        _norm(account_age_days or 0, caps["account_age_days"]),
+        # _norm(account_age_days or 0, caps["account_age_days"]),  # Excluded for now
     ]
     return sum(comps) / len(comps)
 
