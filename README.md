@@ -174,6 +174,7 @@ Copy `.vali_env_tmpl` to `.vali_env` and configure the following variables:
 | `MODEL` | LLM model identifier for re-analysis (e.g., `deepseek-ai/DeepSeek-V3-0324`) |
 | `API_KEY` | API key for the LLM service |
 | `LLM_BASE` | Base URL for the LLM API endpoint |
+| `X_API_SOURCE ` | Which X api endpoint to use (default: `x_api`) |
 | `X_BEARER_TOKEN` | X/Twitter API bearer token for authentication |
 | `X_API_BASE` | Base URL for X/Twitter API (default: `https://api.twitter.com/2`) |
 | `MINER_API_URL` | URL of the coordination API server (`https://talisman.rizzo.network/api`) |
