@@ -121,7 +121,7 @@ Validates miner's analysis against validator's independent analysis:
 Cross-checks miner's score against validator's computed score:
 
 1. **Score Computation**: Validator computes its own score using the same algorithm as miners
-   - Uses `score_tweet_entry()` with same weights (50% relevance, 40% value, 10% recency)
+   - Uses `score_post_entry()` with same weights (50% relevance, 40% value, 10% recency)
    - Uses live metrics from X API (not miner-provided metrics)
 
 2. **Score Inflation Check**: Miner score may not exceed validator score beyond tolerance
@@ -287,7 +287,7 @@ The validator **requires** access to the X/Twitter API for validation:
 - **Retry Logic**: Includes deterministic jitter seeded by post_id for consistent behavior
 
 **X API Usage:**
-- Fetches tweet data including: text, author, timestamp, public metrics
+- Fetches post data including: text, author, timestamp, public metrics
 - Fetches author data including: username, followers, account creation date
 - Uses deterministic retries for rate limits and transient errors
 

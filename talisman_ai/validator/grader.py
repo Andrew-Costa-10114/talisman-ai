@@ -8,7 +8,7 @@ import bittensor as bt
 import tweepy
 from dateutil.parser import isoparse
 from talisman_ai.analyzer import setup_analyzer
-from talisman_ai.analyzer.scoring import score_tweet_entry
+from talisman_ai.analyzer.scoring import score_post_entry
 from talisman_ai import config
 from talisman_ai.utils.normalization import norm_text
 from talisman_ai.validator import x_api_client, sn13_api_client
@@ -108,7 +108,7 @@ def analyze_text(text: str, analyzer) -> Tuple[Dict[str, float], float]:
     if analyzer is None:
         return {}, 0.0
     try:
-        out = analyzer.analyze_tweet_complete(text)
+        out = analyzer.analyze_post_complete(text)
     except Exception as e:
         bt.logging.error(f"[GRADER] Analyzer error: {e}")
         return {}, 0.0
@@ -166,9 +166,9 @@ def compute_validator_score(content: str, date_iso: str, likes: int, retweets: i
     """
     entry = {
         "url": "post",
-        "tweet_info": {
-            "tweet_text": content,
-            "tweet_date": date_iso,
+        "post_info": {
+            "post_text": content,
+            "post_date": date_iso,
             "like_count": int(likes or 0),
             "retweet_count": int(retweets or 0),
             "quote_count": 0,
@@ -179,7 +179,7 @@ def compute_validator_score(content: str, date_iso: str, likes: int, retweets: i
     }
     try:
         # Pass analysis_result to avoid re-analyzing the same text
-        scored = score_tweet_entry(entry, analyzer, k=5, analysis_result=analysis_result)
+        scored = score_post_entry(entry, analyzer, k=5, analysis_result=analysis_result)
         return float(scored.get("score", 0.0))
     except Exception as e:
         # We surface this upstream as an INVALID result with code=score_compute_error.
@@ -307,7 +307,7 @@ def grade_hotkey(posts: List[Dict], analyzer=None, x_client=None) -> Tuple[int, 
         
         # Get analysis result once - we'll reuse it for scoring to avoid duplicate LLM calls
         try:
-            analysis_result = analyzer.analyze_tweet_complete(content)
+            analysis_result = analyzer.analyze_post_complete(content)
         except Exception as e:
             bt.logging.error(f"[GRADER] Analyzer error: {e}")
             return _err("analyzer_error", f"Analyzer failed: {e}", post_id, {}, i)

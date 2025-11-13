@@ -67,8 +67,8 @@ Fetches posts from X/Twitter API using the Tweepy client.
 
 **Data Format:**
 Each post includes:
-- `id`: Tweet ID
-- `content`: Tweet text
+- `id`: Post ID
+- `content`: Post text
 - `author`: Author username
 - `timestamp`: Unix timestamp
 - `account_age`: Account age in days
@@ -95,7 +95,7 @@ Uses LLM-based analysis to determine subnet relevance and sentiment.
   - `-1.0`: Very bearish (major issues, strong criticism)
 
 **Scoring:**
-Posts are scored using `score_tweet_entry()` which combines three components:
+Posts are scored using `score_post_entry()` which combines three components:
 
 1. **Relevance** (50% weight): Mean relevance score of top-k subnets
    - Uses LLM-based analyzer to determine subnet relevance
@@ -105,7 +105,7 @@ Posts are scored using `score_tweet_entry()` which combines three components:
    - Normalizes: likes, retweets, quotes, replies, followers, account age
    - Uses caps: 5k likes, 1k retweets, 300 quotes, 600 replies, 200k followers, 7 years account age
 
-3. **Recency** (10% weight): How recent the tweet is
+3. **Recency** (10% weight): How recent the post is
    - Linear decay from 1.0 (just posted) to 0.0 (older than 24 hours)
    - Formula: `1.0 - (age_hours / 24.0)`
 
@@ -132,7 +132,7 @@ Handles HTTP communication with the coordination API server.
 {
     "miner_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
     "post_id": "1234567890",
-    "content": "Normalized tweet text...",
+    "content": "Normalized post text...",
     "date": 1234567890,  # Unix timestamp
     "author": "username",
     "account_age": 365,
@@ -165,7 +165,7 @@ Handles HTTP communication with the coordination API server.
    - For each new post:
      - Normalizes content using `norm_text()` (ensures consistency with validator)
      - Analyzes for subnet relevance and sentiment using LLM
-     - Calculates post score using `score_tweet_entry()`
+     - Calculates post score using `score_post_entry()`
      - Prepares submission data
 
 4. **Submission:**

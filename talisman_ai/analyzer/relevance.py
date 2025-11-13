@@ -466,7 +466,7 @@ Pick the MOST SPECIFIC category:
         except:
             return "NONE"
     
-    def analyze_tweet_complete(self, text: str) -> dict:
+    def analyze_post_complete(self, text: str) -> dict:
         """
         Analyze post and return rich classification data
         

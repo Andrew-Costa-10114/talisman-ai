@@ -17,7 +17,7 @@ from talisman_ai import config
 from talisman_ai.user_miner.api_client import APIClient
 from talisman_ai.user_miner.post_scraper import PostScraper
 from talisman_ai.analyzer import setup_analyzer
-from talisman_ai.analyzer.scoring import score_tweet_entry
+from talisman_ai.analyzer.scoring import score_post_entry
 from talisman_ai.utils.normalization import norm_text
 
 class MyMiner:
@@ -161,7 +161,7 @@ class MyMiner:
                     # Analyze post content for subnet relevance and sentiment
                     # Returns a dict with subnet_relevance (per-subnet scores) and sentiment
                     bt.logging.info(f"[MyMiner] Analyzing post {pid} (content length: {len(content)} chars)")
-                    analysis = self.analyzer.analyze_tweet_complete(content)
+                    analysis = self.analyzer.analyze_post_complete(content)
                     bt.logging.debug(f"[MyMiner] Analysis complete for {pid}: {analysis}")
                     
                     # Extract subnet relevance scores (0.0 to 1.0) for each subnet
@@ -177,20 +177,20 @@ class MyMiner:
                     sentiment = float(analysis.get("sentiment", 0.0))
                     bt.logging.info(f"[MyMiner] Extracted sentiment for {pid}: {sentiment:.3f}")
 
-                    # Calculate post score using score_tweet_entry (same scoring logic as validator)
+                    # Calculate post score using score_post_entry (same scoring logic as validator)
                     # Convert timestamp to ISO format for scoring function
-                    tweet_date = post.get("timestamp", 0)
-                    if isinstance(tweet_date, int):
-                        dt = datetime.fromtimestamp(tweet_date, tz=timezone.utc)
-                        tweet_date_iso = dt.isoformat()
+                    post_date = post.get("timestamp", 0)
+                    if isinstance(post_date, int):
+                        dt = datetime.fromtimestamp(post_date, tz=timezone.utc)
+                        post_date_iso = dt.isoformat()
                     else:
-                        tweet_date_iso = datetime.now(timezone.utc).isoformat()
+                        post_date_iso = datetime.now(timezone.utc).isoformat()
                     
-                    tweet_entry = {
+                    post_entry = {
                         "url": f"post_{pid}",
-                        "tweet_info": {
-                            "tweet_text": content,
-                            "tweet_date": tweet_date_iso,
+                        "post_info": {
+                            "post_text": content,
+                            "post_date": post_date_iso,
                             "like_count": int(post.get("likes", 0) or 0),
                             "retweet_count": int(post.get("retweets", 0) or 0),
                             "quote_count": 0,  # Not provided in post data
@@ -202,7 +202,7 @@ class MyMiner:
                     
                     try:
                         # Pass the already-computed analysis to avoid re-analyzing all subnets
-                        scored_result = score_tweet_entry(tweet_entry, self.analyzer, k=5, analysis_result=analysis)
+                        scored_result = score_post_entry(post_entry, self.analyzer, k=5, analysis_result=analysis)
                         post_score = scored_result.get("score", 0.0)
                         bt.logging.info(f"[MyMiner] Calculated score for {pid}: {post_score:.3f}")
                     except Exception as e:
