@@ -21,7 +21,7 @@ class PostScraper:
         # ========================================================================
         # CONFIGURABLE KEYWORDS: Modify this list to change search terms
         # ========================================================================
-        self.keywords = ["omron", "bittensor"]
+        self.keywords = ["bittensor"]
         
         self._init_client()
         self._fetch_tweets()
