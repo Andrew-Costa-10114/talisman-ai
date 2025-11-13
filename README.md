@@ -184,17 +184,15 @@ Copy `.vali_env_tmpl` to `.vali_env` and configure the following variables:
 
 ---
 
-## 🪬 Running on Testnet
+## 🪬 Running on Mainnet
 
 **Run Miner**
 
 ```bash
 python neurons/miner.py \
-  --netuid 171 \
-  --subtensor.network test \
+  --netuid 45 \
   --wallet.name cold \
   --wallet.hotkey hot.miner.1 \
-  --axon.port 8094 \
   --logging.info
 ```
 
@@ -204,11 +202,9 @@ python neurons/miner.py \
 
 ```bash
 python neurons/validator.py \
-  --netuid 171 \
-  --subtensor.network test \
+  --netuid 45 \
   --wallet.name cold \
   --wallet.hotkey hot \
-  --axon.port 8093 \
   --logging.info
 ```
 
