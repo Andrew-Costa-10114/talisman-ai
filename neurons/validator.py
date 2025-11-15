@@ -371,6 +371,7 @@ class Validator(BaseValidatorNeuron):
 
         # Note: Scores are sent to miners in _on_batch() after grading completes
         # No need to query here - the Batchscore synapse is sent from _on_batch()
+        self.save_state()
 
         # Delegate to base validator forward logic
         # Miner scores are updated in _on_batch() as batches are processed
