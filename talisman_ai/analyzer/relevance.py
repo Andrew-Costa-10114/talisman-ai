@@ -247,19 +247,25 @@ class SubnetRelevanceAnalyzer:
                 continue
             s = self.subnets[sid]
             
-            # Build comprehensive description
-            ctx = f"SN{sid} ({s.get('name', 'Unknown')}): "
-            ctx += s.get('description', '')[:150]
+            # Build comprehensive description (no truncation - let LLM handle it)
+            ctx = f"SN{sid} ({s.get('name', 'Unknown')}): {s.get('description', '')}"
             
-            # Add identifiers
+            # Add primary functions if available
+            functions = s.get('primary_functions', [])
+            if functions:
+                ctx += f" | Functions: {', '.join(functions[:4])}"
+            
+            # Add all identifiers (not just first 3)
             ids = s.get('unique_identifiers', [])
             if ids:
-                ctx += f" | IDs: {', '.join(ids[:3])}"
+                ctx += f" | IDs: {', '.join(ids)}"
+            
+            # Add distinguishing features if available
+            features = s.get('distinguishing_features', [])
+            if features:
+                ctx += f" | Features: {', '.join(features[:3])}"
             
             contexts.append(ctx)
-            
-            if len(contexts) >= 30:  # Limit context size
-                break
         
         return '\n'.join(contexts)
     
@@ -313,12 +319,15 @@ SUBNET DATABASE:
 
 POST: "{text}"
 
-RULES:
-1. "SN45" or "Subnet 45" → subnet_id=45
-2. "@omron_ai" or similar handles → match to corresponding subnet
-3. Project names near BitTensor words → match to subnet
-4. General BitTensor content → subnet_id=0
-5. Ambiguous or unclear → subnet_id=0"""
+RULES (in priority order):
+1. Explicit mentions: "SN45", "Subnet 45", "@subnet_handle" → match to that subnet_id
+2. Unique identifiers: Match project names, aliases, or technical terms from the IDs/Features lists
+3. Contextual match: Project names mentioned alongside BitTensor-related keywords → match to subnet
+4. General BitTensor content (no specific subnet) → subnet_id=0
+5. Ambiguous, unclear, or no BitTensor connection → subnet_id=0
+
+Extract exact text spans that triggered your decision as evidence_spans.
+List any BitTensor anchor words (e.g., "bittensor", "tao", "subnet", "validator", "miner") as anchors_detected."""
 
         try:
             response = self.client.chat.completions.create(
@@ -347,16 +356,22 @@ RULES:
         """Atomic decision: Content type"""
         prompt = f"""Classify content type of: "{text}"
 
-Pick the MOST SPECIFIC category:
-- announcement: launches, releases
-- partnership: collaborations
-- technical_insight: technical analysis
-- milestone: achievements
-- security: audits, vulnerabilities
-- governance: voting, proposals
-- market_discussion: price talk
-- community: general chat
-- other: doesn't fit"""
+Pick the MOST SPECIFIC category that applies:
+- announcement: product launches, releases, updates
+- partnership: collaborations, integrations, joint ventures
+- technical_insight: technical analysis, architecture, code discussions
+- milestone: achievements, metrics, progress updates
+- tutorial: how-to guides, educational content
+- security: audits, vulnerabilities, exploits, security updates
+- governance: voting, proposals, DAO decisions
+- market_discussion: price talk, trading, speculation
+- hiring: job postings, recruitment
+- meme: jokes, entertainment, humor
+- hype: excitement, enthusiasm, promotional content
+- opinion: personal views, analysis, commentary
+- community: general chatter, engagement, discussions
+- fud: fear, uncertainty, doubt, negative speculation
+- other: doesn't fit any category above"""
 
         try:
             response = self.client.chat.completions.create(
@@ -376,11 +391,12 @@ Pick the MOST SPECIFIC category:
         """Atomic decision: Sentiment"""
         prompt = f"""Classify sentiment of: "{text}"
 
-- very_bullish: 🚀, moon, explosive
-- bullish: positive, optimistic
-- neutral: factual, balanced
-- bearish: concerns, negative
-- very_bearish: crash, failure"""
+Choose the sentiment that best matches the tone:
+- very_bullish: 🚀, moon, ATH, pump, explosive growth, massive gains
+- bullish: positive outlook, optimistic, growth potential, upward trend
+- neutral: factual reporting, balanced, no strong opinion, informational
+- bearish: concerns raised, negative outlook, downward trend, issues mentioned
+- very_bearish: crash, failure, exploit, major problem, severe concerns"""
 
         try:
             response = self.client.chat.completions.create(
