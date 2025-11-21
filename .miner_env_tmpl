@@ -1,4 +1,4 @@
-MODEL=unsloth/Mistral-Small-24B-Instruct-2501
+MODEL=Qwen/Qwen3-32B
 API_KEY=
 LLM_BASE=https://llm.chutes.ai/v1
 
