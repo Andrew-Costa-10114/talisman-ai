@@ -96,5 +96,7 @@ POSTS_TO_SUBMIT = int(os.getenv("POSTS_TO_SUBMIT", "1"))
 MINER_API_URL = os.getenv("MINER_API_URL", "null")
 BATCH_HTTP_TIMEOUT = float(os.getenv("BATCH_HTTP_TIMEOUT", "30.0"))
 VOTE_ENDPOINT = os.getenv("VOTE_ENDPOINT", "null")
-BATCH_POLL_SECONDS = int(os.getenv("BATCH_POLL_SECONDS", "10"))
+# Backward compatibility: support both old and new names
+VALIDATION_POLL_SECONDS = int(os.getenv("VALIDATION_POLL_SECONDS", os.getenv("BATCH_POLL_SECONDS", "10")))
+SCORES_BLOCK_INTERVAL = int(os.getenv("SCORES_BLOCK_INTERVAL", "100"))
 
