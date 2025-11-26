@@ -1,17 +1,18 @@
 # User Miner Module
 
-The user miner is the core component that orchestrates the post processing pipeline: **scrape → analyze → submit**. It runs continuously in a background thread, fetching posts from X/Twitter, analyzing them for subnet relevance and sentiment, and submitting high-quality posts to the coordination API.
+The user miner is the core component that orchestrates the post processing pipeline: **scrape → analyze → submit**. It runs continuously in a background thread, fetching posts from X/Twitter, analyzing them for subnet relevance and sentiment, and submitting high-quality posts to the coordination API v2.
 
 ## Overview
 
-The miner follows a simple but effective pipeline:
+The miner follows a **block-based approach** aligned with API v2's rate limiting system:
 
-1. **Scrape** posts from X/Twitter API using configurable keywords
-2. **Analyze** each post for subnet relevance and sentiment using LLM-based analysis
-3. **Score** posts using a weighted combination of relevance, value, and recency
-4. **Submit** analyzed posts to the API server for validation
+1. **Wait** for new block window (every 100 blocks, ~20 minutes)
+2. **Scrape** exactly 5 posts from X/Twitter API (matches API rate limit)
+3. **Analyze** each post for subnet relevance and sentiment using LLM-based analysis
+4. **Score** posts using a weighted combination of relevance, value, and recency
+5. **Submit** all analyzed posts to the API v2 server (`/v2/submit`)
 
-The miner runs in a single background thread for simplicity and reliability, continuously processing posts until reaching the configured limit or being stopped.
+The miner runs in a single background thread for simplicity and reliability. It synchronizes with the API's block number to ensure accurate window alignment and respects server-side rate limits.
 
 ## Architecture
 
@@ -40,29 +41,34 @@ The main orchestrator class that runs the processing loop. It:
 - Manages the background thread lifecycle (`start()`, `stop()`)
 - Coordinates scraping, analysis, and submission
 - Tracks processed posts to avoid duplicates
-- Respects configuration limits (`MAX_POSTS`, `POSTS_PER_SCRAPE`, `POSTS_TO_SUBMIT`)
-- Handles errors gracefully with logging
+- Uses **block-based windows** (every 100 blocks) aligned with API v2 rate limits
+- Synchronizes block number with API (source of truth)
+- Respects configuration limits (`BLOCKS_PER_WINDOW`, `MAX_SUBMISSIONS_PER_WINDOW`)
+- Handles errors gracefully with logging (429 rate limits, 409 conflicts)
 
 **Key Methods:**
-- `start()`: Starts the background processing thread
+- `start()`: Starts the background processing thread, syncs with API block number
 - `stop()`: Stops the thread gracefully (waits up to 5 seconds)
 - `get_stats()`: Returns current statistics (posts processed, running status, etc.)
 - `_run()`: Main processing loop (runs in background thread)
+- `_get_current_block()`: Gets current block (prefers API's block number)
+- `_sync_with_api_block()`: Synchronizes miner's block tracking with API
+- `_should_scrape()`: Determines if new block window has started
 
 ### PostScraper (`post_scraper.py`)
 
 Fetches posts from X/Twitter API using the Tweepy client.
 
 **Features:**
-- Searches for tweets matching configurable keywords (default: `["omron", "bittensor"]`)
+- **On-demand fetching**: Fetches fresh posts each time `scrape_posts()` is called (no pool maintained)
+- Searches for tweets matching configurable keywords (default: `["bittensor"]`)
 - Fetches tweets from the last 72 hours
 - Excludes retweets and filters by English language
-- Tracks seen tweets to avoid duplicates
-- Automatically refetches when running low on tweets (< 10 remaining)
-- Returns random samples from the fetched pool
+- Fetches at least 10 tweets (X API minimum), then randomly samples down to requested count
+- Designed for block-based workflow: fetches exactly `count` posts per window
 
 **Configuration:**
-- Keywords are configurable in `post_scraper.py` (line 24): `self.keywords = ["omron", "bittensor"]`
+- Keywords are configurable in `post_scraper.py` (line 25): `self.keywords = ["bittensor"]`
 - Uses `X_BEARER_TOKEN` and `X_API_BASE` from `.miner_env` configuration
 
 **Data Format:**
@@ -116,16 +122,20 @@ post_score = 0.50 × relevance + 0.40 × value + 0.10 × recency
 
 ### APIClient (`api_client.py`)
 
-Handles HTTP communication with the coordination API server.
+Handles HTTP communication with the coordination API v2 server.
 
 **Features:**
-- Submits posts to `/v1/submit` endpoint
-- Includes miner hotkey in `X-Hotkey` header for authentication
+- Submits posts to `/v2/submit` endpoint (API v2)
+- Uses Bittensor wallet authentication (`X-Auth-*` headers)
 - Implements retry logic with exponential backoff:
   - Up to 3 attempts total
   - Wait times: 3s after first failure, 6s after second failure
   - 10 second timeout per request
-- Treats "duplicate" status as success (API is idempotent)
+- Handles rate limit errors (429): Extracts block/window info, doesn't retry immediately
+- Handles conflict errors (409): Permanent failure, doesn't retry
+- Treats "duplicate" status as success (API is idempotent per `(miner_hotkey, post_id)`)
+- Extracts block/window info from API responses for synchronization
+- Logs validation selection status (when posts are selected for validation)
 
 **Submission Format:**
 ```python
@@ -155,28 +165,39 @@ Handles HTTP communication with the coordination API server.
    - Miner starts with hotkey from parent neuron
    - Initializes `PostScraper`, `Analyzer`, and `APIClient`
    - Loads subnet registry from `analyzer/data/subnets.json`
+   - Attempts to synchronize with API's block number via `/v2/status` endpoint
 
-2. **Scrape Cycle:**
-   - Waits `SCRAPE_INTERVAL_SECONDS` between cycles (default: 300s = 5 minutes)
-   - Scrapes `POSTS_PER_SCRAPE` posts (default: 5)
+2. **Block Window Detection:**
+   - Polls current block number every ~12 seconds (block time)
+   - Uses API's block number as source of truth (synchronized from API responses)
+   - Detects new block window when `current_block // BLOCKS_PER_WINDOW` changes
+   - Each window is `BLOCKS_PER_WINDOW` blocks (default: 100 blocks ≈ 20 minutes)
+
+3. **Scrape Cycle (per window):**
+   - When new window detected, scrapes exactly `MAX_SUBMISSIONS_PER_WINDOW` posts (default: 5)
+   - Matches API v2's rate limit: `MAX_SUBMISSION_RATE` per `BLOCKS_PER_WINDOW`
    - Filters out posts already seen (tracked in `_seen_post_ids`)
 
-3. **Analysis:**
+4. **Analysis:**
    - For each new post:
      - Normalizes content using `norm_text()` (ensures consistency with validator)
      - Analyzes for subnet relevance and sentiment using LLM
      - Calculates post score using `score_post_entry()`
-     - Prepares submission data
+     - Prepares submission data with all required fields
 
-4. **Submission:**
-   - Submits up to `POSTS_TO_SUBMIT` posts per cycle (default: 2)
+5. **Submission:**
+   - Submits all analyzed posts to `/v2/submit` endpoint
+   - Synchronizes block number with API from response (source of truth)
+   - Handles errors appropriately:
+     - **429 (Rate Limit)**: Waits for next window, doesn't retry immediately
+     - **409 (Conflict)**: Permanent failure, marks post as seen, doesn't retry
+     - **Other errors**: Retries up to 3 times with exponential backoff
    - Tracks successful submissions in `_seen_post_ids`
    - Increments `posts_processed` counter
 
-5. **Limits:**
-   - Stops if `posts_processed >= MAX_POSTS` (0 = unlimited)
-   - Respects `POSTS_TO_SUBMIT` per cycle limit
-   - Continues until stopped or limit reached
+6. **Limits:**
+   - Respects API's server-side rate limits (5 posts per 100-block window)
+   - Continues until stopped explicitly
 
 ## Configuration
 
@@ -184,17 +205,17 @@ The miner respects the following environment variables from `.miner_env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SCRAPE_INTERVAL_SECONDS` | Interval between scrape cycles | `300` (5 minutes) |
-| `POSTS_PER_SCRAPE` | Number of posts to scrape per cycle | `5` |
-| `POSTS_TO_SUBMIT` | Number of posts to submit per cycle | `2` |
-| `MAX_POSTS` | Maximum posts to process (0 = unlimited) | `0` |
+| `BLOCKS_PER_WINDOW` | Number of blocks per rate limit window | `100` (~20 minutes) |
+| `MAX_SUBMISSIONS_PER_WINDOW` | Max posts to scrape/submit per window | `5` (matches API rate limit) |
 | `X_BEARER_TOKEN` | X/Twitter API bearer token | Required |
 | `X_API_BASE` | X/Twitter API base URL | `https://api.twitter.com/2` |
-| `MINER_API_URL` | Coordination API server URL | `http://127.0.0.1:8000` |
+| `MINER_API_URL` | Coordination API v2 server URL | `http://127.0.0.1:8001` (v2 port) |
 | `BATCH_HTTP_TIMEOUT` | HTTP timeout for API requests | `30.0` |
 | `MODEL` | LLM model identifier | `deepseek-ai/DeepSeek-V3-0324` |
 | `API_KEY` | LLM API key | Required |
 | `LLM_BASE` | LLM API base URL | `https://llm.chutes.ai/v1` |
+
+**Note:** Legacy variables (`SCRAPE_INTERVAL_SECONDS`, `POSTS_PER_SCRAPE`, `POSTS_TO_SUBMIT`) are no longer used. The miner now uses block-based windows aligned with API v2's rate limiting system.
 
 ## Text Normalization
 
@@ -211,20 +232,35 @@ This ensures that minor formatting differences don't cause false mismatches duri
 
 The miner handles errors gracefully:
 
-- **Scraping errors**: Logs warning and continues to next cycle
+- **Scraping errors**: Logs warning and continues to next window
 - **Analysis errors**: Logs warning, uses default values (score = 0.0), continues
-- **API submission errors**: Retries up to 3 times with exponential backoff
-- **Thread errors**: Logs error, waits 2 seconds, continues loop
+- **API submission errors**:
+  - **429 (Rate Limit)**: Extracts block/window info, waits for next window, doesn't retry immediately
+  - **409 (Conflict)**: Permanent failure (duplicate/conflict), marks post as seen, doesn't retry
+  - **Other errors**: Retries up to 3 times with exponential backoff (3s, 6s, 12s)
+- **Block synchronization errors**: Falls back to subtensor if API unavailable
+- **Thread errors**: Logs error, waits ~12 seconds (block time), continues loop
 
 ## Statistics
 
 The miner tracks:
 - `posts_processed`: Number of posts successfully submitted
-- `max_posts`: Maximum posts to process before stopping
 - `running`: Whether the miner is currently running
 - `thread_alive`: Whether the background thread is alive
 
 Access via `my_miner.get_stats()`.
+
+## API v2 Integration
+
+The miner is designed to work with **API v2's probabilistic validation system**:
+
+- **Rate Limiting**: Submits exactly 5 posts per 100-block window, matching API's `MAX_SUBMISSION_RATE`
+- **Block Synchronization**: Uses API's block number as source of truth for window calculations
+- **Validation Selection**: Posts have a 20% chance (configurable) of being selected for validation (handled server-side)
+- **Idempotency**: API is idempotent per `(miner_hotkey, post_id)` - duplicate submissions return "duplicate" status
+- **Error Responses**: API returns block/window info in all responses for synchronization
+
+The miner doesn't need to know about validation selection or reward calculation - these are handled entirely by the API server.
 
 ## Integration
 

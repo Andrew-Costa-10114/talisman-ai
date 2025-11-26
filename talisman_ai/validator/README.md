@@ -1,12 +1,12 @@
 # Validator Module
 
-The validator is responsible for independently verifying miner submissions and enforcing quality standards. Unlike traditional Bittensor validators that query miners directly, this validator polls a coordination API for batches of miner posts, validates them against ground truth (X/Twitter API), and submits votes back to the API for consensus tracking.
+The validator is responsible for independently verifying miner submissions and enforcing quality standards. Unlike traditional Bittensor validators that query miners directly, this validator polls a coordination API for validation payloads, validates them using LLM analysis, and submits results back to the API.
 
 ## Overview
 
 The validator operates in two phases:
 
-1. **Batch Processing**: Continuously polls the API for batches of miner posts, grades each miner's submissions using a three-stage validation system, and submits votes back to the API
+1. **Validation Processing**: Continuously polls the API for validation payloads, grades individual posts using LLM analysis, and submits results back to the API
 2. **Score Management**: Updates miner scores based on validation results, which are used by the base validator to set weights on-chain
 
 The validator runs asynchronously in the background, processing batches independently of the main validator forward loop.
@@ -17,16 +17,15 @@ The validator runs asynchronously in the background, processing batches independ
 ┌─────────────────────────────────────────────────────────────┐
 │                  Validator Neuron                           │
 │                                                             │
-│  ┌──────────────┐    ┌──────────────┐    ┌────────────── ┐  │
-│  │ BatchClient  │──▶ |    Grader    │──▶│  Vote Submit  │  │
-│  │              │    │              │    │               │  │
-│  │ - Polls API  │    │ - X API      │    │ - Submits     │  │
-│  │ - Tracks     │    │   validation │    │   votes       │  │
-│  │   batches    │    │ - Analysis   │    │ - Updates     │  │
-│  │              │    │   validation │    │   scores      │  │
-│  └──────────────┘    │ - Score      │    └────────────── ┘  │
-│                      │   validation │                       │
-│                      └──────────────┘                       │
+│  ┌──────────────────┐    ┌──────────────┐    ┌──────────┐  │
+│  │ ValidationClient │──▶ |    Grader    │──▶│  Submit   │  │
+│  │                  │    │              │    │  Results  │  │
+│  │ - Polls /v2/    │    │ - LLM        │    │ - Updates │  │
+│  │   validation     │    │   analysis   │    │   scores  │  │
+│  │ - Fetches scores │    │   (tokens &   │    │           │  │
+│  │   from /v2/     │    │   sentiment)  │    │           │  │
+│  │   scores         │    │              │    │           │  │
+│  └──────────────────┘    └──────────────┘    └──────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -37,49 +36,50 @@ The validator runs asynchronously in the background, processing batches independ
 The main validator neuron class that orchestrates batch processing and score management.
 
 **Key Methods:**
-- `__init__()`: Initializes the batch client and loads validator state
-- `forward()`: Starts the batch polling client on first invocation
-- `_on_batch()`: Processes a batch of miner submissions (callback from BatchClient)
-- `_submit_hotkey_votes()`: Submits validator votes to the API
-- `close()`: Gracefully shuts down the validator
+- `__init__()`: Initializes the validation client and analyzer
+- `forward()`: Starts the validation client on first invocation
+- `_on_validations()`: Processes validation payloads from API v2
+- `_process_single_validation()`: Grades a single post using LLM analysis
+- `_submit_pending_results()`: Submits validation results to /v2/validation_result
+- `_on_scores()`: Updates hotkey rewards based on scores from /v2/scores
 
 **Processing Flow:**
-1. BatchClient polls API and calls `_on_batch()` when a new batch is available
-2. For each miner in the batch:
-   - Grades their posts using `grade_hotkey()`
-   - Calculates reward based on label (VALID/INVALID) and final_score
-   - Maps hotkey to UID for score updates
-   - Collects votes for API submission
-3. Updates validator scores using `update_scores()`
-4. Submits votes to API for consensus tracking
+1. ValidationClient polls /v2/validation and fetches validation payloads
+2. For each validation payload:
+   - Grades the post using `grade_hotkey()` (LLM analysis only - tokens and sentiment)
+   - X API validation is done on the API side before posts are sent to validators
+   - Collects results for batch submission
+3. Submits all results to /v2/validation_result
+4. Fetches scores from /v2/scores every N blocks and updates hotkey rewards
 
 **Reward Logic:**
 - **VALID miners**: Receive full incentive score (`reward = final_score`)
 - **INVALID miners**: Receive 10% penalty (`reward = final_score * 0.1`)
 
-### BatchClient (`batch_client.py`)
+### ValidationClient (`validation_client.py`)
 
-Asynchronously polls the coordination API for batches of miner posts.
+Client for API v2 validation system that handles fetching validations and scores.
 
 **Features:**
-- Polls `/v1/batch` endpoint at configurable intervals (`BATCH_POLL_SECONDS`)
-- Tracks last processed `batch_id` to avoid duplicate processing
+- Polls `/v2/validation` endpoint for validation payloads
+- Submits results to `/v2/validation_result` endpoint
+- Fetches scores from `/v2/scores` every N blocks (configurable via `SCORES_BLOCK_INTERVAL`)
+- Tracks last processed scores window to avoid duplicates
 - Handles HTTP errors gracefully (logs warnings, continues polling)
-- Calls callback function when new batch is detected
-- Supports both sync and async callbacks
+- Supports authentication via Bittensor wallet signatures
 
 **Configuration:**
 - `api_url`: Base URL for the miner API (default: `MINER_API_URL` env var)
-- `poll_seconds`: Seconds between poll attempts (default: `BATCH_POLL_SECONDS` env var or 10s)
-- `http_timeout`: HTTP request timeout (default: `BATCH_HTTP_TIMEOUT` env var or 10.0s)
+- `poll_seconds`: Seconds between poll attempts (default: `VALIDATION_POLL_SECONDS` env var or 10s)
+- `http_timeout`: HTTP request timeout (default: `BATCH_HTTP_TIMEOUT` env var or 30.0s)
+- `scores_block_interval`: Blocks between score fetches (default: `SCORES_BLOCK_INTERVAL` env var or 100)
 
-**Batch Format:**
-Each batch contains:
-- `batch_id`: Unique identifier for the batch
-- `batch`: List of miner entries, each containing:
-  - `hotkey`: Miner's hotkey identifier
-  - `posts`: List of post submissions to validate (API-selected sample)
-  - `total_posts`: Total count of posts for this miner
+**Validation Payload Format:**
+Each validation payload contains:
+- `validation_id`: Unique identifier for the validation
+- `miner_hotkey`: Miner's hotkey identifier
+- `post`: Post data to validate (content, tokens, sentiment, etc.)
+- `selected_at`: Timestamp when post was selected for validation
 
 ### Grader (`grader.py`)
 
@@ -87,21 +87,7 @@ Core validation logic that performs three-stage validation of miner posts.
 
 **Validation Stages:**
 
-#### Stage 1: X API Validation
-Validates posts against live X/Twitter API data:
-
-1. **Post Existence**: Post must exist and be accessible via X API
-2. **Text Match**: Content must match exactly after normalization (NFC, whitespace)
-3. **Author Match**: Author username must match exactly (lowercase)
-4. **Timestamp Match**: Timestamp must match exactly (Unix seconds)
-5. **Metric Inflation Check**: Engagement metrics may NOT be overstated beyond tolerance:
-   - Likes, retweets, replies, followers: max(1, ceil(10% of live value))
-   - Understatement is allowed; overstatement beyond tolerance fails validation
-
-**Tolerance:**
-- `POST_METRIC_TOLERANCE = 0.1` (10% relative, with floor of 1)
-
-#### Stage 2: Content Analysis Validation
+#### Stage 1: Content Analysis Validation
 Validates miner's analysis against validator's independent analysis:
 
 1. **Token Matching**: Subnet relevance scores must match within tolerance
@@ -117,24 +103,12 @@ Validates miner's analysis against validator's independent analysis:
 - `TOKEN_TOLERANCE = 0.05` (absolute)
 - `SENTIMENT_TOLERANCE = 0.05` (absolute)
 
-#### Stage 3: Score Validation
-Cross-checks miner's score against validator's computed score:
-
-1. **Score Computation**: Validator computes its own score using the same algorithm as miners
-   - Uses `score_post_entry()` with same weights (50% relevance, 40% value, 10% recency)
-   - Uses live metrics from X API (not miner-provided metrics)
-
-2. **Score Inflation Check**: Miner score may not exceed validator score beyond tolerance
-   - Tolerance: `SCORE_TOLERANCE = 0.05` (absolute)
-   - Miner score must be ≤ validator_score + 0.05
-
-**Tolerance:**
-- `SCORE_TOLERANCE = 0.05` (absolute)
+**Note:** X API validation (post existence, text/author/timestamp matching, metric inflation checks) is now performed on the API side before posts are sent to validators. Validators only perform LLM-based analysis validation.
 
 **Validation Order:**
 - Posts are validated sequentially
-- **Stops at first failure** - if any post fails, the entire batch is marked INVALID
-- Only if ALL posts pass does the miner receive VALID
+- **Stops at first failure** - if any post fails validation, the result is marked as failed
+- Only if the post passes all checks does it receive a success result
 
 **Final Scoring:**
 If all posts pass validation:
@@ -165,76 +139,58 @@ Template reward function (not used in this subnet). Rewards are calculated in `_
 ### Complete Validation Flow
 
 ```
-1. BatchClient polls API
+1. ValidationClient polls API for validation payloads
    ↓
-2. New batch detected (batch_id changed)
+2. Posts received (already passed X API validation on API side)
    ↓
-3. For each miner in batch:
-   ├─> For each post:
-   │   ├─> Stage 1: X API validation
-   │   │   ├─> Post exists?
-   │   │   ├─> Text matches?
-   │   │   ├─> Author matches?
-   │   │   ├─> Timestamp matches?
-   │   │   └─> Metrics not inflated?
-   │   │
-   │   ├─> Stage 2: Analysis validation
-   │   │   ├─> Tokens match within ±0.05?
-   │   │   └─> Sentiment matches within ±0.05?
-   │   │
-   │   └─> Stage 3: Score validation
-   │       └─> Score not inflated beyond +0.05?
+3. For each validation payload:
+   ├─> Stage 1: LLM Analysis validation
+   │   ├─> Tokens match within ±0.05?
+   │   └─> Sentiment matches within ±0.05?
    │
-   └─> If all posts pass:
-       ├─> Calculate final_score
-       ├─> Map hotkey to UID
-       └─> Collect vote
+   └─> If post passes:
+       └─> Collect result (success=true)
    ↓
-4. Update validator scores
+4. Submit results to /v2/validation_result
    ↓
-5. Submit votes to API
+5. Fetch scores from /v2/scores and update hotkey rewards
 ```
+
+**Note:** X API validation (post existence, text/author/timestamp matching, metric inflation checks) is performed on the API side before posts are sent to validators. Validators only perform LLM-based analysis validation (tokens/relevance and sentiment).
 
 ### Error Handling
 
 The validator handles errors gracefully:
 
-- **X API Errors**: Returns `x_api_error` or `x_api_no_response`
-- **Post Not Found**: Returns `post_not_found`
-- **Text Mismatch**: Returns `text_mismatch` with preview of differences
-- **Author Mismatch**: Returns `author_mismatch` with both values
-- **Timestamp Mismatch**: Returns `timestamp_mismatch` with difference
-- **Metric Inflation**: Returns specific error code (`metric_inflation_likes`, etc.)
-- **Token Mismatch**: Returns `tokens_mismatch` with top 5 mismatches
+- **Analyzer Errors**: Returns `analyzer_error` if LLM analysis fails
+- **Empty Content**: Returns `empty_content` if post has no content
+- **Token Mismatch**: Returns `tokens_mismatch` with top mismatches
 - **Sentiment Mismatch**: Returns `sentiment_mismatch` with both values
-- **Score Inflation**: Returns `score_inflation` with both scores
-- **Score Compute Error**: Returns `score_compute_error` if validator can't compute score
 
 All errors include:
 - `code`: Error code identifier
 - `message`: Human-readable error message
 - `post_id`: Post that failed validation
-- `post_index`: Index of post in batch (0-based)
 - `details`: Additional context (mismatches, values, etc.)
 
-## Vote Submission
+**Note:** X API validation errors (post not found, text/author/timestamp mismatches, metric inflation) are handled on the API side before posts are sent to validators.
 
-Votes are submitted to the API endpoint (`VOTE_ENDPOINT`) with the following format:
+## Validation Result Submission
+
+Validation results are submitted to the `/v2/validation_result` endpoint with the following format:
 
 ```python
 {
     "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-    "batch_id": 1234567890,
-    "votes": [
+    "results": [
         {
+            "validation_id": "uuid-here",
             "miner_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
-            "label": 1,  # 1=VALID, 0=INVALID
-            "score": 0.75,  # Final incentive score
-            "failure_reason": {  # Only present if INVALID
+            "success": true,  # true if validation passed, false if failed
+            "failure_reason": {  # Only present if success=false
                 "code": "tokens_mismatch",
                 "message": "subnet relevance differs beyond tolerance",
                 "post_id": "1234567890",
-                "post_index": 2,
                 "details": {...}
             }
         },
@@ -243,12 +199,17 @@ Votes are submitted to the API endpoint (`VOTE_ENDPOINT`) with the following for
 }
 ```
 
+**Note:** The `validator_hotkey` is included in the payload (not in each result), and each result includes `validation_id`, `miner_hotkey`, `success`, and optionally `failure_reason`.
+
 **Headers:**
-- `x-hotkey`: Validator's hotkey address
+- `X-Auth-SS58Address`: Validator's hotkey address (SS58 format)
+- `X-Auth-Signature`: Signature of auth message
+- `X-Auth-Message`: Auth message (timestamp-based)
+- `X-Auth-Timestamp`: Timestamp used in auth message
 
 **Response Handling:**
 - Success: Logs response data
-- Timeout: Logs error, continues processing
+- HTTP errors: Logs error, results are kept for retry
 - Other errors: Logs error with exception info
 
 ## Configuration
@@ -257,13 +218,11 @@ The validator respects the following environment variables from `.vali_env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BATCH_POLL_SECONDS` | Interval between batch polls | `10` |
+| `VALIDATION_POLL_SECONDS` | Interval between validation polls | `10` |
 | `BATCH_HTTP_TIMEOUT` | HTTP timeout for API requests | `30.0` |
-| `MINER_API_URL` | Coordination API server URL | `http://127.0.0.1:8000` |
-| `VOTE_ENDPOINT` | Endpoint for submitting votes | `http://127.0.0.1:8000/v1/validate_hotkeys` |
-| `X_BEARER_TOKEN` | X/Twitter API bearer token | Required |
-| `X_API_BASE` | X/Twitter API base URL | `https://api.twitter.com/2` |
-| `MODEL` | LLM model identifier | `deepseek-ai/DeepSeek-V3-0324` |
+| `MINER_API_URL` | Coordination API server URL | `https://talisman.rizzo.network/api` |
+| `SCORES_BLOCK_INTERVAL` | Blocks between score fetches | `100` |
+| `MODEL` | LLM model identifier | `Qwen/Qwen3-32B` |
 | `API_KEY` | LLM API key | Required |
 | `LLM_BASE` | LLM API base URL | `https://llm.chutes.ai/v1` |
 
@@ -278,18 +237,9 @@ The validator normalizes post content using `norm_text()` to ensure consistency 
 
 This ensures that minor formatting differences don't cause false mismatches.
 
-## X API Requirements
+## X API Validation
 
-The validator **requires** access to the X/Twitter API for validation:
-
-- **Bearer Token**: Must be set in `X_BEARER_TOKEN` environment variable
-- **Rate Limits**: Handled with deterministic retries (up to 3 attempts)
-- **Retry Logic**: Includes deterministic jitter seeded by post_id for consistent behavior
-
-**X API Usage:**
-- Fetches post data including: text, author, timestamp, public metrics
-- Fetches author data including: username, followers, account creation date
-- Uses deterministic retries for rate limits and transient errors
+**Note:** X API validation is now performed on the API side before posts are sent to validators. The validator no longer requires X API access and only performs LLM-based analysis validation (tokens/relevance and sentiment).
 
 ## Score Updates
 
@@ -311,23 +261,10 @@ Validator scores are updated using the base validator's `update_scores()` method
 | `no_posts` | No posts submitted |
 | `missing_post_id` | Post ID is required |
 | `analyzer_unavailable` | Analyzer not initialized |
-| `x_api_unavailable` | X API client unavailable |
-| `x_api_error` | X API request failed |
-| `x_api_no_response` | X API gave no response after retries |
-| `post_not_found` | Post not found or inaccessible |
-| `text_mismatch` | Content doesn't match live post text |
-| `author_mismatch` | Author doesn't match |
-| `timestamp_missing` | Timestamp is missing |
-| `timestamp_mismatch` | Timestamp doesn't match exactly |
-| `metric_inflation_likes` | Likes overstated beyond tolerance |
-| `metric_inflation_retweets` | Retweets overstated beyond tolerance |
-| `metric_inflation_replies` | Replies overstated beyond tolerance |
-| `metric_inflation_followers` | Followers overstated beyond tolerance |
 | `empty_content` | Post content is empty |
+| `analyzer_error` | Analyzer failed to process post |
 | `tokens_mismatch` | Subnet relevance differs beyond tolerance |
 | `sentiment_mismatch` | Sentiment differs beyond tolerance |
-| `score_compute_error` | Validator couldn't compute score |
-| `score_inflation` | Miner score exceeds validator tolerance |
 
 ## Integration
 
@@ -337,16 +274,20 @@ The validator is integrated into the main neuron (`neurons/validator.py`):
 class Validator(BaseValidatorNeuron):
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
-        self._batch_client = BatchClient()
-        self._batch_task = None
+        self._analyzer = setup_analyzer()
+        self._validation_client = ValidationClient(wallet=self.wallet)
+        self._validation_task = None
     
     async def forward(self):
-        if self._batch_task is None:
-            self._batch_task = asyncio.create_task(
-                self._batch_client.run(self._on_batch)
+        if self._validation_task is None:
+            self._validation_task = asyncio.create_task(
+                self._validation_client.run(
+                    on_validations=self._on_validations,
+                    on_scores=self._on_scores,
+                )
             )
         return await forward(self)
 ```
 
-The batch client runs independently in the background, processing batches as they become available, while the base validator handles weight setting automatically based on epoch timing.
+The validation client runs independently in the background, processing validations and fetching scores as they become available, while the base validator handles weight setting automatically based on epoch timing.
 

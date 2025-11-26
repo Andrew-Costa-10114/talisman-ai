@@ -160,7 +160,6 @@ Copy `.miner_env_tmpl` to `.miner_env` and configure the following variables:
 | `X_API_BASE` | Base URL for X/Twitter API (default: `https://api.twitter.com/2`) |
 | `MINER_API_URL` | URL of the coordination API server (`https://talisman.rizzo.network/api`) |
 | `BATCH_HTTP_TIMEOUT` | HTTP timeout in seconds for API requests (default: `30.0`) |
-| `MAX_POSTS` | Maximum number of posts to process (0 = unlimited) |
 | `SCRAPE_INTERVAL_SECONDS` | Interval between scrape cycles in seconds (default: `300` = 5 minutes) |
 | `POSTS_PER_SCRAPE` | Number of posts to scrape per cycle |
 | `POSTS_TO_SUBMIT` | Number of posts to submit per cycle (should be ≤ `POSTS_PER_SCRAPE`) |
