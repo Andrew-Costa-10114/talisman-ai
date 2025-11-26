@@ -18,19 +18,46 @@
 # DEALINGS IN THE SOFTWARE.
 
 import bittensor as bt
-from typing import Optional
+from typing import Optional, Dict, Any
 
-class Batchscore(bt.Synapse):
+class Score(bt.Synapse):
     """
-    Synapse for sending batch scores from validator to miner.
+    Synapse for sending scores from validator to miner.
     
-    The validator sends this synapse to inform miners of their score for a specific batch.
-    The miner receives the batch_id and avg_score (API-calculated average of ALL posts).
-    For VALID batches, this is the avg_score_all_posts.
-    For INVALID batches, this is 0.0.
+    The validator sends this synapse to inform miners of their score for a 100-block interval.
+    The miner receives the block_window_start, block_window_end, their score for that interval, and the validator hotkey.
     """
-    # Input set by validator - batch identifier
-    batch_id: str
+    # Input set by validator - start block of the 100-block interval
+    block_window_start: int
 
-    # Input set by validator - API-calculated average score of ALL posts (or 0.0 if INVALID)
-    avg_score: Optional[float] = None
+    # Input set by validator - end block of the 100-block interval
+    block_window_end: int
+
+    # Input set by validator - score for this hotkey in the 100-block interval
+    score: float
+
+    # Input set by validator - hotkey of the validator sending this score
+    validator_hotkey: str
+
+
+class ValidationResult(bt.Synapse):
+    """
+    Synapse for sending validation results from validator to miner.
+    
+    The validator sends this synapse to inform miners about the validation result of a specific post.
+    The miner receives information about which post was validated, whether it passed or failed, and why.
+    """
+    # Input set by validator - validation identifier from the API
+    validation_id: str
+
+    # Input set by validator - ID of the post that was validated
+    post_id: str
+
+    # Input set by validator - whether the validation passed (True) or failed (False)
+    success: bool
+
+    # Input set by validator - hotkey of the validator sending this result
+    validator_hotkey: str
+
+    # Input set by validator - failure reason if success=False, None if success=True
+    failure_reason: Optional[Dict[str, Any]] = None
