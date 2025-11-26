@@ -79,6 +79,11 @@ class MyMiner:
         # to ensure our window calculations match the server's expectations.
         self._api_block_number: Optional[int] = None
         
+        # Periodic status check: reach out to status endpoint every minute
+        # to keep block tracking synchronized with the API
+        self._last_status_check: Optional[float] = None
+        self._status_check_interval: float = 60.0  # Check status every 60 seconds
+        
         # Rate limiting is handled server-side by the API v2 endpoint.
         # The API will return HTTP 429 (rate limit exceeded) if we exceed the limit.
         # We rely on the API's response rather than tracking limits locally to avoid
@@ -192,6 +197,37 @@ class MyMiner:
         except Exception as e:
             bt.logging.debug(f"[MyMiner] Failed to sync with API on startup: {e}, will sync on first submission")
     
+    def _check_status_periodically(self):
+        """
+        Check the status endpoint periodically (every minute) to keep block tracking
+        synchronized with the API.
+        
+        This ensures the miner's block number stays aligned with the server's view,
+        which is important for accurate window calculations and rate limiting.
+        """
+        now = time.time()
+        
+        # Check if enough time has passed since last status check
+        if self._last_status_check is not None:
+            time_since_last_check = now - self._last_status_check
+            if time_since_last_check < self._status_check_interval:
+                # Too soon to check again
+                return
+        
+        # Update last check time
+        self._last_status_check = now
+        
+        try:
+            status_info = self.api_client.get_status()
+            if status_info and status_info.get("current_block"):
+                api_block = status_info.get("current_block")
+                window_start = status_info.get("window_start_block")
+                if api_block and window_start:
+                    self._sync_with_api_block(api_block, window_start)
+                    bt.logging.debug(f"[MyMiner] Periodic status check: block={api_block}, window_start={window_start}")
+        except Exception as e:
+            bt.logging.debug(f"[MyMiner] Periodic status check failed: {e}")
+    
     def start(self):
         """
         Starts the miner's background processing thread.
@@ -237,6 +273,10 @@ class MyMiner:
         
         while self.running:
             try:
+                # Periodic status check: reach out to status endpoint every minute
+                # to keep block tracking synchronized with the API
+                self._check_status_periodically()
+                
                 current_block = self._get_current_block()
                 
                 if current_block == 0:
