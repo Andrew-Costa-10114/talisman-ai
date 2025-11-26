@@ -14,11 +14,13 @@ Key Features:
 
 from openai import OpenAI
 import json
+import re
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import time
 from datetime import datetime
 import bittensor as bt
+from difflib import SequenceMatcher
 
 from .classifications import ContentType, Sentiment, TechnicalQuality, MarketAnalysis, ImpactPotential
 
@@ -239,6 +241,75 @@ class SubnetRelevanceAnalyzer:
         self.subnets[subnet_id] = subnet_data
         bt.logging.debug(f"[ANALYZER] Registered subnet {subnet_id}: {subnet_data.get('name')}")
     
+    def classify_keyword_based(self, text: str) -> Dict:
+        """
+        Keyword-based subnet classification using edit distance for fuzzy matching.
+        
+        Args:
+            text: Post text to classify
+            
+        Returns:
+            Dict with:
+            - is_bittensor: Whether post is BitTensor-related
+            - confidence: 'high' (anchor present) or 'low' (subnet name only, possible false positive)
+            - subnet_scores: {subnet_id: score}
+            - matched_subnets: [(subnet_id, name, score, evidence), ...] sorted by score
+        """
+        text_lower = text.lower()
+        
+        # Check for explicit BitTensor anchors
+        has_anchor = bool(re.search(r'\bsn\d+\b|\bsubnet\b|\bbittensor\b|\btao\b|\$tao\b|\bopentensor\b', text_lower))
+        
+        # Extract words for matching (4+ chars, exclude ecosystem terms)
+        ecosystem = re.compile(r'^(bittensor|opentensor|tao|subnets?|sn\d+)$')
+        words = {w for w in re.findall(r'\b\w{4,}\b', text_lower) if not ecosystem.match(w)}
+        
+        # Find subnet matches
+        matches = []
+        for sid, data in self.subnets.items():
+            if sid == 0:
+                continue
+            
+            # SN pattern match (e.g., SN23, subnet 23) - (?!\d) prevents SN23 matching SN123
+            if re.search(rf'\bsn\s*{sid}(?!\d)|\bsubnet\s+{sid}(?!\d)', text_lower):
+                matches.append((sid, data['name'], 1.0, [f'SN{sid}']))
+                continue
+            
+            # Check name and identifiers
+            best = (0.0, [])
+            for name in [data.get('name', '')] + data.get('unique_identifiers', []):
+                if not name or len(name) < 4 or ecosystem.match(name.lower()):
+                    continue
+                name_lower = name.lower()
+                
+                # Exact match
+                if name_lower in words:
+                    best = (0.9, [name])
+                    break
+                
+                # Fuzzy match (edit distance >= 0.85)
+                for word in words:
+                    sim = SequenceMatcher(None, word, name_lower).ratio()
+                    if sim >= 0.85 and sim > best[0]:
+                        best = (sim * 0.9, [f'{word}≈{name}'])
+            
+            if best[0] >= 0.75:
+                matches.append((sid, data['name'], best[0], best[1]))
+        
+        # Sort by score descending
+        matches.sort(key=lambda x: x[2], reverse=True)
+        
+        # Determine result
+        if not has_anchor and not matches:
+            return {'is_bittensor': False, 'confidence': None, 'subnet_scores': {}, 'matched_subnets': []}
+        
+        return {
+            'is_bittensor': True,
+            'confidence': 'high' if has_anchor else 'low',
+            'subnet_scores': {m[0]: m[2] for m in matches},
+            'matched_subnets': matches
+        }
+    
     def _build_subnet_context(self) -> str:
         """Build rich semantic context for subnet identification"""
         contexts = []
@@ -309,48 +380,24 @@ class SubnetRelevanceAnalyzer:
             return None
     
     def _identify_subnet(self, text: str) -> dict:
-        """Atomic decision: Which subnet?"""
-        context = self._build_subnet_context()
+        """Identify subnet using keyword-based matching (no LLM)."""
+        result = self.classify_keyword_based(text)
         
-        prompt = f"""Identify which BitTensor subnet this post is about.
-
-SUBNET DATABASE:
-{context}
-
-POST: "{text}"
-
-RULES (in priority order):
-1. Explicit mentions: "SN45", "Subnet 45", "@subnet_handle" → match to that subnet_id
-2. Unique identifiers: Match project names, aliases, or technical terms from the IDs/Features lists
-3. Contextual match: Project names mentioned alongside BitTensor-related keywords → match to subnet
-4. General BitTensor content (no specific subnet) → subnet_id=0
-5. Ambiguous, unclear, or no BitTensor connection → subnet_id=0
-
-Extract exact text spans that triggered your decision as evidence_spans.
-List any BitTensor anchor words (e.g., "bittensor", "tao", "subnet", "validator", "miner") as anchors_detected."""
-
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                tools=[SUBNET_ID_TOOL],
-                tool_choice={"type": "function", "function": {"name": "identify_subnet"}},
-                temperature=0,
-                max_tokens=200
-            )
-            
-            args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
-            subnet_id = args.get("subnet_id", 0)
-            
-            return {
-                'id': subnet_id,
-                'name': self.subnets.get(subnet_id, {}).get("name", "NONE_OF_THE_ABOVE"),
-                'confidence': args.get("confidence", "low"),
-                'evidence': args.get("evidence_spans", []),
-                'anchors': args.get("anchors_detected", [])
-            }
-        except:
+        if not result['is_bittensor']:
             return {'id': 0, 'name': "NONE_OF_THE_ABOVE", 'confidence': "low", 'evidence': [], 'anchors': []}
+        
+        if result['matched_subnets']:
+            top = result['matched_subnets'][0]  # (sid, name, score, evidence)
+            confidence = 'high' if top[2] >= 0.9 else 'medium' if top[2] >= 0.8 else 'low'
+            return {
+                'id': top[0],
+                'name': top[1],
+                'confidence': confidence,
+                'evidence': top[3],
+                'anchors': []
+            }
+        
+        return {'id': 0, 'name': "NONE_OF_THE_ABOVE", 'confidence': "low", 'evidence': [], 'anchors': []}
     
     def _classify_content_type(self, text: str) -> str:
         """Atomic decision: Content type"""
