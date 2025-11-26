@@ -59,8 +59,10 @@ class ValidationClient:
         self.wallet = wallet
 
         self._running: bool = False
-        self._last_scores_block_window: Optional[int] = None
+        self._last_scores_window: Optional[int] = None  # Last window number we fetched scores for (from API)
         self._current_validations: List[Dict[str, Any]] = []
+        self._last_status_check: Optional[float] = None  # Timestamp of last status check
+        self._status_check_interval: int = 60  # Check status every 60 seconds (scores change every ~20 minutes)
 
     def _create_auth_headers(self) -> Dict[str, str]:
         """Create authentication headers if wallet is available"""
@@ -103,6 +105,14 @@ class ValidationClient:
             r.raise_for_status()
             return r.json()
 
+    async def fetch_status(self) -> Optional[Dict[str, Any]]:
+        """Fetch status from /v2/status to sync block numbers"""
+        status_endpoint = f"{self.api_url}/v2/status"
+        async with httpx.AsyncClient(timeout=self.http_timeout) as client:
+            r = await client.get(status_endpoint)
+            r.raise_for_status()
+            return r.json()
+
     async def fetch_scores(self) -> Optional[Dict[str, Any]]:
         """Fetch scores from /v2/scores"""
         headers = self._create_auth_headers()
@@ -111,41 +121,56 @@ class ValidationClient:
             r.raise_for_status()
             return r.json()
 
-    def _get_current_block(self) -> int:
-        """Get current block number"""
+    async def _should_fetch_scores(self) -> bool:
+        """
+        Check if we should fetch scores by querying API's current window.
+        
+        Since the API now returns scores from the PREVIOUS window, we fetch scores
+        when a new window starts (i.e., when current_window > last_scores_window).
+        This ensures we get the completed previous window's scores.
+        """
+        import time
+        
+        # Only check status periodically (not every loop iteration)
+        # Since scores change every ~20 minutes, checking every 60 seconds is sufficient
+        now = time.time()
+        if self._last_status_check is not None:
+            time_since_last_check = now - self._last_status_check
+            if time_since_last_check < self._status_check_interval:
+                # Too soon to check again
+                return False
+        
+        self._last_status_check = now
+        
         try:
-            network = getattr(config, "BT_NETWORK", "test")
-            sub = bt.subtensor(network=network)
-            return sub.get_current_block()
+            status_data = await self.fetch_status()
+            if status_data and status_data.get("status") == "ok":
+                api_current_window = status_data.get("current_window")
+                
+                if api_current_window is not None:
+                    # Fetch if we haven't fetched for this current window yet
+                    # When a new window starts, we want to fetch the previous window's scores
+                    if self._last_scores_window is None or self._last_scores_window < api_current_window:
+                        return True
+                    
+                    # Already fetched for this window
+                    return False
         except Exception as e:
-            bt.logging.error(f"[VALIDATION] Failed to get current block: {e}")
-            return 0
-
-    def _should_fetch_scores(self, current_block: int) -> bool:
-        """Check if we should fetch scores based on block interval"""
-        if current_block == 0:
-            return False
+            bt.logging.debug(f"[VALIDATION] Failed to check API window: {e}")
         
-        # Calculate which block window we're in
-        block_window = current_block // self.scores_block_interval
-        
-        # Fetch if we haven't fetched for this window yet
-        if self._last_scores_block_window is None or self._last_scores_block_window < block_window:
-            return True
-        
-        # Still in the same window - will check again on next loop iteration
+        # If we can't determine, don't fetch (will retry on next check interval)
         return False
 
     async def run(
         self,
-        on_validation: Callable[[Dict[str, Any]], Any],
+        on_validations: Callable[[List[Dict[str, Any]]], Any],
         on_scores: Callable[[Dict[str, Any]], Any],
     ):
         """
         Main validation loop.
         
         Args:
-            on_validation: Callback for each validation payload (async or sync)
+            on_validations: Callback for batch of validation payloads (async or sync)
             on_scores: Callback when scores are fetched (async or sync)
         """
         self._running = True
@@ -154,50 +179,61 @@ class ValidationClient:
         try:
             while self._running:
                 try:
-                    # Check if we need to fetch scores
-                    current_block = self._get_current_block()
-                    should_fetch = self._should_fetch_scores(current_block)
-                    
-                    if not should_fetch and self._last_scores_block_window is not None:
-                        # Still in same block window, will check again on next iteration
-                        current_window = current_block // self.scores_block_interval
-                        blocks_until_next = ((current_window + 1) * self.scores_block_interval) - current_block
-                        bt.logging.debug(
-                            f"[VALIDATION] Scores check: still in window {current_window} "
-                            f"({blocks_until_next} blocks until next window)"
-                        )
+                    # Check if we need to fetch scores (based on API's current window)
+                    should_fetch = await self._should_fetch_scores()
                     
                     if should_fetch:
                         try:
-                            expected_window_start = (current_block // self.scores_block_interval) * self.scores_block_interval
-                            
-                            scores_data = await self.fetch_scores()
-                            if scores_data:
-                                # Verify the scores match the expected window
-                                api_window_start = scores_data.get("block_window_start")
-                                api_current_block = scores_data.get("current_block", 0)
+                            # Get current window from status to confirm we should fetch
+                            status_data = await self.fetch_status()
+                            if status_data and status_data.get("status") == "ok":
+                                api_current_window = status_data.get("current_window")
                                 
-                                # Double-check we're still in the same window
-                                verify_block = self._get_current_block()
-                                verify_window_start = (verify_block // self.scores_block_interval) * self.scores_block_interval
-                                
-                                if api_window_start == expected_window_start and verify_window_start == expected_window_start:
-                                    block_window = current_block // self.scores_block_interval
-                                    self._last_scores_block_window = block_window
-                                    bt.logging.info(
-                                        f"[VALIDATION] Fetched scores for block window {block_window} "
-                                        f"(blocks {api_window_start}-{scores_data.get('block_window_end')}, "
-                                        f"current={api_current_block})"
-                                    )
-                                    
-                                    # Call scores callback
-                                    maybe_coro = on_scores(scores_data)
-                                    if asyncio.iscoroutine(maybe_coro):
-                                        await maybe_coro
+                                if api_current_window is not None:
+                                    # Fetch scores - API now returns scores from the PREVIOUS window
+                                    scores_data = await self.fetch_scores()
+                                    if scores_data:
+                                        # Verify we got scores for the previous window
+                                        api_window_start = scores_data.get("block_window_start")
+                                        api_window_end = scores_data.get("block_window_end")
+                                        api_current_block = scores_data.get("current_block", 0)
+                                        
+                                        if api_window_start is not None:
+                                            # Use blocks_per_window from API response (source of truth)
+                                            api_blocks_per_window = scores_data.get("blocks_per_window", self.scores_block_interval)
+                                            
+                                            # Calculate window from block_window_start using API's blocks_per_window
+                                            # This should be the previous window (api_current_window - 1)
+                                            calculated_window = api_window_start // api_blocks_per_window
+                                            expected_previous_window = api_current_window - 1
+                                            
+                                            # Verify we got scores for the previous window
+                                            if calculated_window == expected_previous_window or (api_current_window > 0 and calculated_window < api_current_window):
+                                                # Mark that we've fetched scores for this current window
+                                                # (the scores are from the previous window, but we fetched them now)
+                                                self._last_scores_window = api_current_window
+                                                bt.logging.info(
+                                                    f"[VALIDATION] Fetched scores for previous block window {calculated_window} "
+                                                    f"(blocks {api_window_start}-{api_window_end}, "
+                                                    f"current window={api_current_window}, current block={api_current_block})"
+                                                )
+                                                
+                                                # Call scores callback
+                                                maybe_coro = on_scores(scores_data)
+                                                if asyncio.iscoroutine(maybe_coro):
+                                                    await maybe_coro
+                                            else:
+                                                bt.logging.warning(
+                                                    f"[VALIDATION] Window mismatch: expected previous window {expected_previous_window}, "
+                                                    f"got {calculated_window} (current={api_current_window}), skipping"
+                                                )
+                                        else:
+                                            bt.logging.warning(
+                                                f"[VALIDATION] Invalid scores response: missing block_window_start"
+                                            )
                                 else:
-                                    bt.logging.warning(
-                                        f"[VALIDATION] Block window mismatch: expected_start={expected_window_start}, "
-                                        f"api_start={api_window_start}, verify_start={verify_window_start}, skipping"
+                                    bt.logging.debug(
+                                        f"[VALIDATION] Status response missing current_window, will retry"
                                     )
                         except Exception as e:
                             bt.logging.warning(f"[VALIDATION] Failed to fetch scores: {e}")
@@ -218,13 +254,14 @@ class ValidationClient:
                         except Exception as e:
                             bt.logging.warning(f"[VALIDATION] Failed to fetch validations: {e}")
 
-                    # Process validations one at a time
+                    # Process all validations at once
                     if self._current_validations:
-                        validation = self._current_validations.pop(0)
-                        maybe_coro = on_validation(validation)
+                        validations = self._current_validations.copy()
+                        self._current_validations.clear()
+                        maybe_coro = on_validations(validations)
                         if asyncio.iscoroutine(maybe_coro):
                             await maybe_coro
-                        # Continue immediately to process next validation or fetch more
+                        # Continue immediately to fetch more validations
                         continue
 
                 except asyncio.CancelledError:
