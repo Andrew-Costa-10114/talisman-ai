@@ -7,7 +7,7 @@ This module should be imported at the top of any module that needs configuration
     
 Then access config values as:
     config.MODEL
-    config.MAX_POSTS
+    config.BLOCKS_PER_WINDOW
     etc.
 """
 
@@ -71,21 +71,21 @@ X_API_SOURCE = os.getenv("X_API_SOURCE", "x_api")
 # Miner-Specific Configuration
 # ============================================================================
 
-# Maximum number of posts to process before stopping
-# Set to 0 or a very large number for unlimited processing
-# Default: 1000 if not specified
-MAX_POSTS = int(os.getenv("MAX_POSTS", "1000"))
-
 # Scraping configuration
-# Interval between scrape cycles in seconds (default: 300 = 5 minutes)
-SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "300"))
-# Maximum number of tweets to fetch per API call (default: 10)
-MAX_RESULTS = int(os.getenv("MAX_RESULTS", "10"))
-# Number of posts to scrape per cycle (default: 1)
-POSTS_PER_SCRAPE = int(os.getenv("POSTS_PER_SCRAPE", "1"))
-# Number of posts to submit per cycle (default: 1)
-# Set this lower than POSTS_PER_SCRAPE to analyze more posts but submit fewer
-POSTS_TO_SUBMIT = int(os.getenv("POSTS_TO_SUBMIT", "1"))
+# DEPRECATED: These are no longer used with block-based scraping approach.
+# The miner now uses BLOCKS_PER_WINDOW and MAX_SUBMISSIONS_PER_WINDOW instead.
+# Keeping these for backward compatibility but they have no effect.
+SCRAPE_INTERVAL_SECONDS = int(os.getenv("SCRAPE_INTERVAL_SECONDS", "300"))  # Unused - block-based now
+MAX_RESULTS = int(os.getenv("MAX_RESULTS", "10"))  # Unused - count parameter used instead
+POSTS_PER_SCRAPE = int(os.getenv("POSTS_PER_SCRAPE", "1"))  # Unused - posts_per_window used instead
+POSTS_TO_SUBMIT = int(os.getenv("POSTS_TO_SUBMIT", "1"))  # Unused - all scraped posts are submitted
+
+# API v2 rate limit configuration
+# Maximum submissions per block window (default: 5, matches API v2 default)
+# Must match MAX_SUBMISSION_RATE in api_v2 if using API v2
+MAX_SUBMISSIONS_PER_WINDOW = int(os.getenv("MAX_SUBMISSIONS_PER_WINDOW", os.getenv("MAX_SUBMISSION_RATE", "5")))
+# Blocks per window (default: 100 blocks, ~20 minutes at 12s per block)
+BLOCKS_PER_WINDOW = int(os.getenv("BLOCKS_PER_WINDOW", "100"))
 
 
 # ============================================================================
