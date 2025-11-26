@@ -25,9 +25,9 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
 
         # Initialize the user miner (runs in background thread)
-        # Pass the hotkey and wallet from the wallet for authentication
+        # Pass the hotkey, wallet, and subtensor for authentication and block tracking
         hotkey = self.wallet.hotkey.ss58_address
-        self.my_miner = MyMiner(hotkey=hotkey, wallet=self.wallet)
+        self.my_miner = MyMiner(hotkey=hotkey, wallet=self.wallet, subtensor=self.subtensor)
         self.my_miner.start()
         
         bt.logging.info(f"User miner started with hotkey: {hotkey}")
@@ -47,16 +47,46 @@ class Miner(BaseMinerNeuron):
         return synapse
 
 
-    async def forward_batch_score(self, synapse: talisman_ai.protocol.Batchscore) -> talisman_ai.protocol.Batchscore:
+    async def forward_score(self, synapse: talisman_ai.protocol.Score) -> talisman_ai.protocol.Score:
         """
-        Processes incoming synapses for batch scoring.
+        Processes incoming Score synapses from validators.
+        
+        Receives the score that the validator has given this hotkey for a 100-block interval.
         """
-        # Print the batch_id and score received from the validator
-        batch_id = synapse.batch_id
-        # Check for score in avg_score or score field
-        score = None
-        score = synapse.avg_score if synapse.avg_score is not None else synapse.score
-        bt.logging.info(f"[BatchScore] Received batch_id: {batch_id}, score: {score}")
+        block_window_start = synapse.block_window_start
+        block_window_end = synapse.block_window_end
+        score = synapse.score
+        validator_hotkey = synapse.validator_hotkey
+        bt.logging.info(
+            f"[Score] Received score: {score:.6f} from validator {validator_hotkey} for block window {block_window_start}-{block_window_end}"
+        )
+        return synapse
+
+    async def forward_validation_result(self, synapse: talisman_ai.protocol.ValidationResult) -> talisman_ai.protocol.ValidationResult:
+        """
+        Processes incoming ValidationResult synapses from validators.
+        
+        Receives validation results for a specific post, including whether it passed or failed and why.
+        """
+        validation_id = synapse.validation_id
+        post_id = synapse.post_id
+        success = synapse.success
+        validator_hotkey = synapse.validator_hotkey
+        failure_reason = synapse.failure_reason
+        
+        if success:
+            bt.logging.info(
+                f"[ValidationResult] ✓ Post {post_id} PASSED validation from validator {validator_hotkey} "
+                f"(validation_id: {validation_id})"
+            )
+        else:
+            failure_code = failure_reason.get("code", "unknown") if failure_reason else "unknown"
+            failure_message = failure_reason.get("message", "Unknown error") if failure_reason else "Unknown error"
+            bt.logging.warning(
+                f"[ValidationResult] ✗ Post {post_id} FAILED validation from validator {validator_hotkey} "
+                f"(validation_id: {validation_id}): {failure_code} - {failure_message}"
+            )
+        
         return synapse
 
     async def blacklist(
@@ -99,7 +129,7 @@ class Miner(BaseMinerNeuron):
             return True, "Missing dendrite or hotkey"
 
         # TODO(developer): Define how miners should blacklist requests.
-        uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+        # Check if hotkey is registered BEFORE trying to get its index
         if (
             not self.config.blacklist.allow_non_registered
             and synapse.dendrite.hotkey not in self.metagraph.hotkeys
@@ -109,6 +139,14 @@ class Miner(BaseMinerNeuron):
                 f"Blacklisting un-registered hotkey {synapse.dendrite.hotkey}"
             )
             return True, "Unrecognized hotkey"
+
+        # Only get uid if hotkey is in metagraph (to avoid IndexError)
+        try:
+            uid = self.metagraph.hotkeys.index(synapse.dendrite.hotkey)
+        except ValueError:
+            # Hotkey not found in metagraph (shouldn't happen if check above passed, but be safe)
+            bt.logging.warning(f"Hotkey {synapse.dendrite.hotkey} not found in metagraph")
+            return True, "Hotkey not in metagraph"
 
         if self.config.blacklist.force_validator_permit:
             # If the config is set to force validator permit, then we should only allow requests from validators.

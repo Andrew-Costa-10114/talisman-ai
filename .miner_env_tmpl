@@ -1,23 +1,21 @@
+# LLM Analysis
 MODEL=Qwen/Qwen3-32B
 API_KEY=
 LLM_BASE=https://llm.chutes.ai/v1
 
+# X/Twitter API Configuration
 X_BEARER_TOKEN=
-
 X_API_BASE=https://api.twitter.com/2
 
+# Miner API Configuration (API v2)
+# Base URL for the miner API (API v2 endpoint: /v2/submit)
 MINER_API_URL=https://talisman.rizzo.network/api
+# HTTP timeout in seconds for API requests
 BATCH_HTTP_TIMEOUT=30.0
 
-MAX_POSTS=0
-
-# Scraping configuration
-# Interval between scrape cycles in seconds (900 = 15 minutes, yields ~18 posts per 4.5 hour batch)
-SCRAPE_INTERVAL_SECONDS=900
-# Maximum number of tweets to fetch per API call (default: 10)
-# Lower values reduce API usage; higher values provide more buffer
-MAX_RESULTS=10
-# Number of posts to scrape per cycle
-POSTS_PER_SCRAPE=3
-# Number of posts to submit per cycle (should be <= POSTS_PER_SCRAPE)
-POSTS_TO_SUBMIT=1
+# Block-based Rate Limiting Configuration
+# Number of blocks per rate limit window (default: 100 blocks, ~20 minutes at 12s per block)
+BLOCKS_PER_WINDOW=100
+# Maximum posts to scrape and submit per block window (default: 5, matches API v2 rate limit)
+# Must match MAX_SUBMISSION_RATE in api_v2 if using API v2
+MAX_SUBMISSIONS_PER_WINDOW=5
