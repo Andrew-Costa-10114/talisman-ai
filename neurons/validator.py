@@ -62,7 +62,13 @@ class Validator(BaseValidatorNeuron):
             result = await self._process_single_validation(validation, validation_results_by_hotkey)
             results.append(result)
         
-        # Send batched ValidationResult synapses to miners
+        # Add all results to pending
+        self._pending_results.extend(results)
+        
+        # Submit all results to API FIRST (before sending synapses)
+        await self._submit_pending_results()
+        
+        # Send batched ValidationResult synapses to miners AFTER API submission
         if validation_results_by_hotkey:
             bt.logging.info(
                 f"[VALIDATION] Sending ValidationResult synapses to {len(validation_results_by_hotkey)} miner(s)"
@@ -70,12 +76,6 @@ class Validator(BaseValidatorNeuron):
             await self._send_batched_validation_results(validation_results_by_hotkey)
         else:
             bt.logging.warning("[VALIDATION] No validation results to send to miners")
-        
-        # Add all results to pending
-        self._pending_results.extend(results)
-        
-        # Submit all results together
-        await self._submit_pending_results()
     
     async def _process_single_validation(
         self, 
