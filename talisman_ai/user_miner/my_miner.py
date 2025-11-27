@@ -352,12 +352,10 @@ class MyMiner:
                             relevance_score = relevance_data.get("relevance", 0.0)
                             tokens[subnet_name] = float(relevance_score)
                         
-                        # Ensure tokens is never empty - API requires at least one subnet with relevance > 0.0
-                        # If tokens is empty or all values are 0.0, add a default subnet with minimum relevance
+                        # Skip posts without valid subnet tokens - subnet requires at least one subnet with relevance > 0.0
                         if not tokens or max(tokens.values(), default=0.0) <= 0.0:
-                            # Add "sn45" subnet with minimum relevance to ensure validation passes
-                            tokens["sn45"] = 0.01  # Minimum non-zero relevance
-                            bt.logging.warning(f"[MyMiner] No subnet relevance found for {pid}, adding default 'sn45' with relevance 0.01")
+                            bt.logging.warning(f"[MyMiner] Post {pid} has no subnet relevance (tokens empty or all zero), skipping submission")
+                            continue
                         
                         bt.logging.info(f"[MyMiner] Extracted tokens for {pid}: {list(tokens.keys())} (scores: {tokens})")
                         
