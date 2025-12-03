@@ -401,24 +401,78 @@ class SubnetRelevanceAnalyzer:
     
     def _classify_content_type(self, text: str) -> str:
         """Atomic decision: Content type"""
-        prompt = f"""Classify content type of: "{text}"
+        prompt = f"""You are classifying a social media post about BitTensor or cryptocurrency. Classify the content type.
 
-Pick the MOST SPECIFIC category that applies:
-- announcement: product launches, releases, updates
-- partnership: collaborations, integrations, joint ventures
-- technical_insight: technical analysis, architecture, code discussions
-- milestone: achievements, metrics, progress updates
-- tutorial: how-to guides, educational content
-- security: audits, vulnerabilities, exploits, security updates
-- governance: voting, proposals, DAO decisions
-- market_discussion: price talk, trading, speculation
-- hiring: job postings, recruitment
-- meme: jokes, entertainment, humor
-- hype: excitement, enthusiasm, promotional content
-- opinion: personal views, analysis, commentary
-- community: general chatter, engagement, discussions
-- fud: fear, uncertainty, doubt, negative speculation
-- other: doesn't fit any category above"""
+Post: "{text}"
+
+Instructions:
+- Choose the MOST SPECIFIC category that best describes this post
+- If multiple categories apply, choose the primary one
+- Be precise: "announcement" is for official releases, not just mentions
+
+Categories with examples:
+
+- announcement: Official product launches, releases, updates
+  Examples: "We're launching X", "Version 2.0 is live", "New feature released"
+  Key: Official, formal releases from projects/teams
+  
+- partnership: Explicit collaborations, integrations, joint ventures
+  Examples: "Partnering with X", "Integration with Y announced", "Joint venture with Z"
+  Key: Two or more entities working together
+  
+- technical_insight: Technical analysis, architecture discussions, code
+  Examples: "Using X architecture improves Y", "Code review shows...", "Technical deep dive into..."
+  Key: Technical details, code, architecture discussions
+  
+- milestone: Achievements, metrics, progress updates
+  Examples: "Reached 1M users", "50K transactions processed", "Milestone achieved: X"
+  Key: Specific achievements, metrics, goals reached
+  
+- tutorial: How-to guides, step-by-step instructions
+  Examples: "How to use X feature", "Step-by-step guide to...", "Tutorial: Getting started"
+  Key: Educational, instructional content
+  
+- security: Audits, vulnerabilities, exploits, security updates
+  Examples: "Security audit completed", "Vulnerability found in X", "Security patch released"
+  Key: Security-related information
+  
+- governance: Voting, proposals, DAO decisions
+  Examples: "DAO proposal to...", "Vote on proposal X", "Governance decision: Y"
+  Key: Community/governance decisions
+  
+- market_discussion: Price talk, trading, speculation
+  Examples: "Price prediction for X", "Trading strategy", "Market analysis shows..."
+  Key: Focus on price/market/trading
+  
+- hiring: Job postings, recruitment
+  Examples: "We're hiring X", "Job opening: Y role", "Looking for developers"
+  Key: Employment opportunities
+  
+- meme: Jokes, entertainment, humor
+  Examples: Memes, jokes, humorous content about crypto/tech
+  Key: Entertainment, humor
+  
+- hype: Excitement, enthusiasm, promotional content
+  Examples: "This is going to moon!", "Huge announcement coming!", "Get ready!"
+  Key: Excitement without specific details
+  
+- opinion: Personal views, analysis, commentary
+  Examples: "I think X will...", "In my opinion...", "Analysis: Y"
+  Key: Personal perspective, analysis
+  
+- community: General chatter, engagement, discussions
+  Examples: "What do you think about X?", "Discussion thread", "Community feedback"
+  Key: Social interaction, general discussion
+  
+- fud: Fear, uncertainty, doubt, negative speculation
+  Examples: "X is going to crash", "Major concerns about Y", "This is a scam"
+  Key: Negative speculation, spreading doubt
+  
+- other: Doesn't fit any category above
+  Examples: Unclear content, doesn't match any category
+  Key: Catch-all for uncategorized content
+
+Choose the category name that best fits this post."""
 
         try:
             response = self.client.chat.completions.create(
@@ -436,14 +490,43 @@ Pick the MOST SPECIFIC category that applies:
     
     def _classify_sentiment(self, text: str) -> str:
         """Atomic decision: Sentiment"""
-        prompt = f"""Classify sentiment of: "{text}"
+        prompt = f"""You are analyzing a social media post about BitTensor or cryptocurrency. Classify the market sentiment.
 
-Choose the sentiment that best matches the tone:
-- very_bullish: 🚀, moon, ATH, pump, explosive growth, massive gains
-- bullish: positive outlook, optimistic, growth potential, upward trend
-- neutral: factual reporting, balanced, no strong opinion, informational
-- bearish: concerns raised, negative outlook, downward trend, issues mentioned
-- very_bearish: crash, failure, exploit, major problem, severe concerns"""
+Post text: "{text}"
+
+Analyze the overall tone and implied market outlook. Consider:
+- Explicit sentiment indicators (emojis, language)
+- Implied market direction (positive/negative/neutral)
+- Intensity of the sentiment
+
+Sentiment categories:
+
+1. very_bullish - Extreme positive sentiment
+   Indicators: 🚀, "moon", "ATH", "pump", "10x", "massive gains", "game changer", "revolutionary"
+   Examples: "This is going to the moon! 🚀", "ATH incoming, this is huge", "10x potential here"
+   Tone: Highly enthusiastic, expecting major gains
+   
+2. bullish - Positive but measured optimism
+   Indicators: "looking good", "solid", "bullish", "positive trend", "optimistic"
+   Examples: "Bullish on this project", "Fundamentals are solid", "Positive momentum building"
+   Tone: Optimistic, expecting upward movement
+   
+3. neutral - Factual, balanced, no strong bias
+   Indicators: Informational content, factual statements, balanced reporting
+   Examples: "Version 2.0 has been released", "DAO proposal passed", "Metrics: 1M users"
+   Tone: Informational, no implied market direction
+   
+4. bearish - Negative concerns or skepticism
+   Indicators: "concerns", "worried", "downward", "issues", "skeptical"
+   Examples: "Concerned about the roadmap", "Not convinced this will work", "Downward trend continues"
+   Tone: Skeptical, expecting potential decline
+   
+5. very_bearish - Extreme negative sentiment
+   Indicators: "crash", "failure", "exploit", "doomed", "rug pull", "scam"
+   Examples: "This is going to crash", "Major exploit found", "Project is doomed"
+   Tone: Highly negative, expecting major problems
+
+Choose the category that best matches the post's sentiment. Be precise - distinguish between bullish (measured) and very_bullish (extreme). Consider the implied market impact and tone, not just explicit price mentions."""
 
         try:
             response = self.client.chat.completions.create(
@@ -461,12 +544,33 @@ Choose the sentiment that best matches the tone:
     
     def _assess_technical_quality(self, text: str) -> str:
         """Atomic decision: Technical quality"""
-        prompt = f"""Assess technical quality of: "{text}"
+        prompt = f"""Assess the technical quality and specificity of this post.
 
-- high: ≥2 specifics (APIs, versions, metrics)
-- medium: 1 specific detail
-- low: claims without specifics
-- none: no technical content"""
+Post: "{text}"
+
+Rate based on how many concrete, verifiable technical details are present:
+
+- high: 2+ specific technical details
+  Examples: "Using API v2.3.1", "Achieved 99.9% uptime", "Implemented SHA-256 hashing", "Reduced latency to 12ms"
+  Must have: Specific versions, metrics, algorithms, protocols, technical specifications
+  Criteria: At least two verifiable, objective technical facts
+  
+- medium: 1 specific technical detail
+  Examples: "Version 2.0 released", "Uses REST API", "Performance improved by 50%"
+  Has some specificity but limited details
+  Criteria: One concrete technical detail (version, metric, protocol, etc.)
+  
+- low: Technical claims without specifics
+  Examples: "Fast performance", "Secure system", "Scalable architecture", "High throughput"
+  Mentions technology but no concrete details or verifiable facts
+  Criteria: General technical claims without supporting specifics
+  
+- none: No technical content
+  Examples: Price discussions, memes, general announcements without technical details
+  Purely social/market content with no technical information
+  Criteria: No technical information present
+
+Count only verifiable, objective technical details (versions, metrics, protocols, algorithms). Subjective claims like "fast" or "secure" don't count unless quantified. General buzzwords don't count."""
 
         try:
             response = self.client.chat.completions.create(
@@ -484,13 +588,39 @@ Choose the sentiment that best matches the tone:
     
     def _classify_market_analysis(self, text: str) -> str:
         """Atomic decision: Market analysis type"""
-        prompt = f"""Classify market analysis type in: "{text}"
+        prompt = f"""Classify the type of market analysis in this post, if any.
 
-- technical: indicators, patterns
-- economic: fundamentals, costs
-- political: regulatory, governance
-- social: narrative, virality
-- other: none or different"""
+Post: "{text}"
+
+Only classify as a market analysis type if the post contains analytical reasoning about market dynamics. If the post just mentions price without analysis, choose "other".
+
+Categories:
+
+- technical: Technical/on-chain analysis
+  Examples: "RSI shows oversold", "On-chain metrics indicate...", "Chart pattern suggests breakout", "MACD crossover signals..."
+  Indicators: Charts, technical indicators, on-chain data, trading patterns
+  Key: Uses technical/on-chain data to predict or analyze market movement
+  
+- economic: Economic fundamentals analysis
+  Examples: "Tokenomics show inflation concerns", "Revenue model suggests growth", "Cost structure indicates profitability"
+  Focus: Financial fundamentals, economics, business model, tokenomics
+  Key: Analyzes economic factors affecting value
+  
+- political: Regulatory/governance analysis
+  Examples: "Regulation will impact adoption", "DAO decision affects token distribution", "Policy changes mean..."
+  Focus: Governance decisions, regulations, policy, legal factors
+  Key: Analyzes how governance/regulatory factors affect market
+  
+- social: Social sentiment/narrative analysis
+  Examples: "Community sentiment turning bullish", "Narrative shifting to DeFi", "Social signals show growing interest"
+  Focus: Social dynamics, narratives, community sentiment, virality
+  Key: Analyzes social factors and narratives affecting market perception
+  
+- other: Not a market analysis, or different type
+  Examples: Simple price mentions ("Price is $X"), announcements without market analysis, memes, general discussion
+  Key: No analytical reasoning about market dynamics, just informational content
+
+If post just mentions price without analytical reasoning about market dynamics, choose "other". The post must analyze why/how market factors affect value."""
 
         try:
             response = self.client.chat.completions.create(
@@ -508,12 +638,38 @@ Choose the sentiment that best matches the tone:
     
     def _assess_impact(self, text: str) -> str:
         """Atomic decision: Impact potential"""
-        prompt = f"""Assess impact potential of: "{text}"
+        prompt = f"""Assess the potential impact this post's content would have on the BitTensor ecosystem.
 
-- HIGH: major releases, critical issues
-- MEDIUM: notable updates, partnerships
-- LOW: minor information
-- NONE: chatter, no impact"""
+Post: "{text}"
+
+Evaluate based on how significant the news/information would be to the ecosystem. Consider:
+- Scope: How many users/projects would be affected?
+- Significance: How important is this information?
+- Actionability: Does it enable new capabilities or indicate major changes?
+
+Impact levels:
+
+- HIGH: Major, ecosystem-wide impact
+  Examples: Critical security vulnerabilities, major protocol upgrades, significant partnerships with major players, major exploits, fundamental changes to network operations
+  Impact: Would affect many users/projects across the ecosystem, significant market implications
+  Criteria: Information that would materially change how people interact with or perceive the ecosystem
+  
+- MEDIUM: Notable but limited impact
+  Examples: Feature releases, medium partnerships, notable milestones (but not groundbreaking), protocol updates (minor), new integrations
+  Impact: Affects specific subnets/users, moderate significance
+  Criteria: Important but not ecosystem-defining, affects a subset of the ecosystem
+  
+- LOW: Minor information
+  Examples: Minor updates, small partnerships, routine announcements, feature additions (small), UI improvements
+  Impact: Limited scope, minimal ecosystem-wide effect
+  Criteria: Useful information but with limited reach or significance
+  
+- NONE: Chatter, no real impact
+  Examples: Price speculation without news, memes, general discussion, personal opinions, routine social interaction
+  Impact: No actionable information or ecosystem significance
+  Criteria: No substantive information that would affect ecosystem operations or perception
+
+Focus on the information's potential to affect the BitTensor ecosystem, not just engagement levels. News that affects multiple subnets or fundamental operations = HIGH. Routine updates = MEDIUM/LOW."""
 
         try:
             response = self.client.chat.completions.create(
