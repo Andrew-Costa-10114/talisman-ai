@@ -38,7 +38,11 @@ class PostScraper:
         # ========================================================================
         # These keywords are used to search for relevant posts on X/Twitter.
         # Posts matching any of these keywords will be fetched and analyzed.
-        self.keywords = ["sn45"]
+        self.keywords = [
+            "sn45", "bittensor", "tao", "opentensor", 
+            "subnet 45", "talisman", "bittensor subnets",
+            "$tao", "bitensor", "opentensor foundation"
+        ]
         
         self._init_client()
 
@@ -100,9 +104,10 @@ class PostScraper:
         try:
             # Build search query from keywords
             # Exclude retweets (-is:retweet) and limit to English posts (lang:en)
+            # Optimized: Search more recent posts (24 hours) for better recency scores
             query = " OR ".join(self.keywords) + " -is:retweet lang:en"
-            # Search for posts from the last 72 hours
-            start_time = datetime.now(timezone.utc) - timedelta(hours=72)
+            # Search for posts from the last 24 hours (optimized for recency scoring)
+            start_time = datetime.now(timezone.utc) - timedelta(hours=24)
             
             bt.logging.info(f"[PostScraper] Fetching up to {fetch_count} tweets with keywords: {self.keywords}")
             bt.logging.debug(f"[PostScraper] Query: {query}")
@@ -163,10 +168,13 @@ class PostScraper:
                 }
                 posts.append(post_data)
             
-            # If we fetched more than requested, randomly sample down to count
-            # This ensures we return exactly the requested number of posts
+            # Sort posts by recency (newest first) for better scoring potential
+            posts.sort(key=lambda p: p.get("timestamp", 0), reverse=True)
+            
+            # If we fetched more than requested, take the top N (newest) posts
+            # This prioritizes recency which contributes to post scores
             if len(posts) > count:
-                posts = random.sample(posts, count)
+                posts = posts[:count]
             
             bt.logging.info(f"[PostScraper] Fetched {len(posts)} post(s) from X API")
             return posts

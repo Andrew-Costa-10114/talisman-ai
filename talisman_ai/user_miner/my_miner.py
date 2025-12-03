@@ -5,7 +5,7 @@ scrape -> analyze -> submit.
 Block-based approach: scrapes every 100 blocks (aligned with API v2 rate limit windows),
 fetches exactly 5 posts (the rate limit max), and submits them all.
 
-Runs in a single background thread for simplicity and reliability.
+Runs in a single background thread for simplicity and reliability.p
 Rate limiting is handled server-side by the API. The miner relies on API responses
 (including 429 rate limit errors) rather than tracking limits locally to avoid
 desynchronization issues.
@@ -291,8 +291,8 @@ class MyMiner:
                     bt.logging.info(f"[MyMiner] Current block: {current_block}, Window: {current_window}")
                     bt.logging.info(f"[MyMiner] Scraping {self.posts_per_window} post(s) for this window...")
                     
-                    # Scrape exactly the number of posts allowed per window
-                    posts = self.scraper.scrape_posts(count=self.posts_per_window) or []
+                    # Scrape posts (fetches more than needed, we'll filter and prioritize)
+                    posts = self.scraper.scrape_posts(count=self.posts_per_window * 3) or []  # Fetch 3x for filtering
                     bt.logging.info(f"[MyMiner] Scraped {len(posts)} post(s)")
                     
                     if not posts:
@@ -301,16 +301,49 @@ class MyMiner:
                         time.sleep(poll_interval)
                         continue
                     
-                    # Filter out posts we've already submitted to avoid duplicates
-                    new_posts = []
+                    # Pre-filter by engagement metrics (before analysis to save LLM costs)
+                    MIN_LIKES = 5
+                    MIN_FOLLOWERS = 100
+                    MIN_CONTENT_LENGTH = 50
+                    
+                    filtered_posts = []
                     for post in posts:
                         pid = str(post.get("id", "unknown"))
-                        if pid not in self._seen_post_ids:
-                            new_posts.append(post)
-                        else:
+                        
+                        # Skip duplicates
+                        if pid in self._seen_post_ids:
                             bt.logging.debug(f"[MyMiner] Post {pid} already submitted, skipping")
+                            continue
+                        
+                        # Filter by engagement
+                        likes = post.get("likes", 0) or 0
+                        followers = post.get("followers", 0) or 0
+                        content = post.get("content", "")
+                        
+                        if likes < MIN_LIKES:
+                            bt.logging.debug(f"[MyMiner] Post {pid} filtered: low likes ({likes} < {MIN_LIKES})")
+                            continue
+                        
+                        if followers < MIN_FOLLOWERS:
+                            bt.logging.debug(f"[MyMiner] Post {pid} filtered: low followers ({followers} < {MIN_FOLLOWERS})")
+                            continue
+                        
+                        if len(content) < MIN_CONTENT_LENGTH:
+                            bt.logging.debug(f"[MyMiner] Post {pid} filtered: content too short ({len(content)} < {MIN_CONTENT_LENGTH})")
+                            continue
+                        
+                        filtered_posts.append(post)
                     
-                    bt.logging.info(f"[MyMiner] {len(new_posts)} new post(s) to process (after filtering duplicates)")
+                    # Sort by engagement (likes + retweets) to prioritize high-quality posts
+                    filtered_posts.sort(key=lambda p: (p.get("likes", 0) or 0) + (p.get("retweets", 0) or 0), reverse=True)
+                    
+                    # Take top N posts after filtering
+                    new_posts = filtered_posts[:self.posts_per_window]
+                    
+                    if len(posts) > len(filtered_posts):
+                        bt.logging.info(f"[MyMiner] Filtered {len(posts) - len(filtered_posts)} post(s) by engagement/quality")
+                    
+                    bt.logging.info(f"[MyMiner] {len(new_posts)} new post(s) to process (after filtering)")
                     
                     if len(new_posts) == 0:
                         bt.logging.info("[MyMiner] No new posts to process, skipping this window")
@@ -324,7 +357,7 @@ class MyMiner:
                     
                     for post in new_posts:
                         pid = str(post.get("id", "unknown"))
-                        bt.logging.info(f"[MyMiner] Processing post ID: {pid}")
+                        bt.logging.debug(f"[MyMiner] Processing post ID: {pid}")
 
                         # Get raw content - API will normalize it via PostSubmission model
                         # We send raw content to avoid double normalization issues
@@ -341,9 +374,9 @@ class MyMiner:
 
                         # Analyze post content for subnet relevance and sentiment
                         # This determines which subnets the post is relevant to and its overall sentiment
-                        bt.logging.info(f"[MyMiner] Analyzing post {pid} (content length: {len(content)} chars)")
+                        bt.logging.debug(f"[MyMiner] Analyzing post {pid} (content length: {len(content)} chars)")
                         analysis = self.analyzer.analyze_post_complete(content)
-                        bt.logging.debug(f"[MyMiner] Analysis complete for {pid}: {analysis}")
+                        bt.logging.debug(f"[MyMiner] Analysis complete for {pid}")
                         
                         # Extract subnet relevance scores (range: 0.0 to 1.0) for each subnet
                         # Higher scores indicate greater relevance to that subnet
@@ -357,11 +390,11 @@ class MyMiner:
                             bt.logging.warning(f"[MyMiner] Post {pid} has no subnet relevance (tokens empty or all zero), skipping submission")
                             continue
                         
-                        bt.logging.info(f"[MyMiner] Extracted tokens for {pid}: {list(tokens.keys())} (scores: {tokens})")
+                        bt.logging.debug(f"[MyMiner] Extracted tokens for {pid}: {list(tokens.keys())}")
                         
                         # Extract sentiment score: -1.0 (very negative) to 1.0 (very positive)
                         sentiment = float(analysis.get("sentiment", 0.0))
-                        bt.logging.info(f"[MyMiner] Extracted sentiment for {pid}: {sentiment:.3f}")
+                        bt.logging.debug(f"[MyMiner] Extracted sentiment for {pid}: {sentiment:.3f}")
 
                         # Calculate post score using the same scoring logic as the validator
                         # This ensures consistency in how posts are evaluated
@@ -389,7 +422,7 @@ class MyMiner:
                         try:
                             scored_result = score_post_entry(post_entry, self.analyzer, k=5, analysis_result=analysis)
                             post_score = scored_result.get("score", 0.0)
-                            bt.logging.info(f"[MyMiner] Calculated score for {pid}: {post_score:.3f}")
+                            bt.logging.debug(f"[MyMiner] Calculated score for {pid}: {post_score:.3f}")
                         except Exception as e:
                             bt.logging.warning(f"[MyMiner] Error calculating score for {pid}: {e}, using 0.0")
                             post_score = 0.0
@@ -409,10 +442,10 @@ class MyMiner:
                             "sentiment": sentiment,
                             "score": post_score,
                         }
-                        bt.logging.info(f"[MyMiner] Prepared post_data for {pid}: hotkey={post_data['miner_hotkey']}, author={post_data['author']}, score={post_score:.3f}")
+                        bt.logging.debug(f"[MyMiner] Prepared post_data for {pid}: author={post_data['author']}, score={post_score:.3f}")
 
                         # Submit post to API server
-                        bt.logging.info(f"[MyMiner] Submitting post {pid} to API...")
+                        bt.logging.debug(f"[MyMiner] Submitting post {pid} to API...")
                         success, block_info, error_status = self.api_client.submit_post(post_data)
                         
                         # Synchronize with API's block number (source of truth for rate limiting)
@@ -451,8 +484,8 @@ class MyMiner:
                     # Retry failed submissions (excluding 409 conflicts and 429 rate limits)
                     # Uses exponential backoff to avoid overwhelming the API
                     if failed_posts:
-                        max_retries = 3
-                        retry_delay = 2.0  # Initial delay in seconds
+                        max_retries = 5  # Increased from 3 for better reliability
+                        retry_delay = 1.0  # Reduced initial delay from 2.0s for faster retries
                         
                         for retry_attempt in range(max_retries):
                             if not failed_posts:
